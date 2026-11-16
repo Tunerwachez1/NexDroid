@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     // accepting a client that expects its frames to go somewhere.
     let (mut backend, mut winit_loop) = winit::init_from_attributes::<GlesRenderer>(
         WindowAttributes::default()
-            .with_title("liwinux — Android")
+            .with_title("NexDroid — Android")
             .with_inner_size(smithay::reexports::winit::dpi::LogicalSize::new(
                 args.width as f64,
                 args.height as f64,

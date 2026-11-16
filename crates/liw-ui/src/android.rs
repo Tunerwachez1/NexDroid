@@ -33,8 +33,8 @@ pub struct Android {
     pub embedded: Option<Arc<Embedded>>,
     /// The last frame turned into a gpui image, with the serial it came from.
     pub image: Option<(u64, Arc<RenderImage>)>,
-    /// Chrome hidden, Android filling the window. Toggled with F11.
-    pub immersive: bool,
+    rendered: Option<Arc<RenderImage>>,
+    previous_rendered: Option<Arc<RenderImage>>,
     pub error: Option<String>,
     /// How many frames the view actually picks up, per second.
     ///
@@ -76,16 +76,42 @@ impl Meter {
 }
 
 impl Android {
+    /// The GPUI sprite atlas does not evict RenderImage entries on Arc drop.
+    /// Retain the current and preceding rendered frame; retire older entries
+    /// only during render, never while a cached scene still uses them.
+    pub fn retire_previous_render(&mut self) -> Option<Arc<RenderImage>> {
+        let current=self.image.as_ref().map(|(_,image)|image.clone());
+        let unchanged=match (&current,&self.rendered) {
+            (Some(a),Some(b)) => Arc::ptr_eq(a,b),
+            (None,None) => true,
+            _ => false,
+        };
+        if unchanged { return None; }
+        let retired=self.previous_rendered.take();
+        self.previous_rendered=self.rendered.take();
+        self.rendered=current;
+        retired
+    }
+    /// Optional developer capture of the actual frame delivered to this view.
+    pub fn save_frame(&self, path: &std::path::Path) -> Result<(), String> {
+        let (_,image) = self.image.as_ref().ok_or("No Android frame has reached the view")?;
+        let size = image.size(0);
+        let mut rgba = image.as_bytes(0).ok_or("Android image is empty")?.to_vec();
+        for pixel in rgba.chunks_exact_mut(4) { pixel.swap(0,2); }
+        image::save_buffer(path,&rgba,size.width.0 as u32,size.height.0 as u32,image::ColorType::Rgba8)
+            .map_err(|e|e.to_string())
+    }
+
     pub fn running(&self) -> bool {
         self.embedded.as_ref().is_some_and(|e| e.is_running())
     }
 
     /// Starts the compositor if it is not already up.
-    pub fn start(&mut self, width: i32, height: i32) {
+    pub fn start(&mut self, mode: liw_core::display::GuestDisplay) {
         if self.running() {
             return;
         }
-        match liw_compositor::spawn(SOCKET, width, height) {
+        match liw_compositor::spawn_with_mode(SOCKET, mode.width as i32, mode.height as i32, (mode.fps*1000) as i32) {
             Ok(e) => {
                 self.embedded = Some(Arc::new(e));
                 self.error = None;
@@ -159,6 +185,24 @@ impl Android {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_atlas_retains_two_rendered_frames_and_retires_older_entries() {
+        fn image() -> Arc<RenderImage> {
+            Arc::new(RenderImage::new(vec![image::Frame::new(image::RgbaImage::new(2,2))]))
+        }
+        let (one,two,three)=(image(),image(),image());
+        let mut android=Android::default();
+        android.image=Some((1,one.clone()));
+        assert!(android.retire_previous_render().is_none());
+        android.image=Some((2,two.clone()));
+        assert!(android.retire_previous_render().is_none());
+        android.image=Some((3,three));
+        assert!(Arc::ptr_eq(&android.retire_previous_render().unwrap(),&one));
+        assert!(android.retire_previous_render().is_none());
+        android.image=Some((4,image()));
+        assert!(Arc::ptr_eq(&android.retire_previous_render().unwrap(),&two));
+    }
 
     #[test]
     fn nothing_is_running_before_it_starts() {

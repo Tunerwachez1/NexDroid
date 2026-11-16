@@ -198,6 +198,10 @@ fn write_back(path: &Path, bindings: &BTreeMap<String, Binding>,
     let p = liw_core::input::Profile {
         name: name.into(), package: package.into(), bindings: bindings.clone(),
     };
+    if path.extension().is_some_and(|extension| extension == "json") {
+        liw_core::input::store::write_json(path, &p)?;
+        return Ok(());
+    }
     let existing = std::fs::read_to_string(path).ok();
     let text = liw_core::input::store::render(existing.as_deref(), &p)
         .context("could not render the profile")?;

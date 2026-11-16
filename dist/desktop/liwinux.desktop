@@ -1,9 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=liwinux
+Name=NexDroid
+Name[ru]=NexDroid
 Comment=Android games on Linux
+Comment[ru]=Android-игры на Linux
 Exec=liw-ui
-Icon=liwinux
+Icon=nexdroid
 Terminal=false
 Categories=Game;
 StartupWMClass=liwinux

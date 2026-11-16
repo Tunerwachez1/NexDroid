@@ -14,6 +14,7 @@
 
 use crate::profile::{Profile, ProfileError};
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Where a profile came from. Carried so we can answer "which file is
@@ -68,17 +69,27 @@ impl Store {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.flatten() {
             let path = e.path();
-            if path.extension().is_none_or(|x| x != "toml") { continue; }
-            match std::fs::read_to_string(&path)
-                .map_err(|e| ProfileError::Io(e))
-                .and_then(|t| Profile::from_toml(&t))
-            {
+            let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else { continue };
+            if !matches!(extension, "toml" | "json") { continue; }
+            let result = Profile::read(&path).and_then(|profile| {
+                if extension == "json" && path.file_name().and_then(|name| name.to_str())
+                    != profile_file_name(&profile.package).as_deref() {
+                    return Err(ProfileError::Invalid("JSON file name must match cont_<package>.json".into()));
+                }
+                Ok(profile)
+            });
+            match result {
                 Ok(profile) => {
                     let entry = Entry { profile, path: path.clone(), origin };
                     let pkg = entry.profile.package.clone();
                     match self.by_package.get(&pkg) {
                         // Higher precedence (smaller Origin) wins.
                         Some(prev) if prev.origin < entry.origin => {}
+                        Some(prev) if prev.origin == entry.origin && prev.path.extension() != path.extension() => {
+                            if extension == "json" {
+                                self.by_package.insert(pkg, entry);
+                            }
+                        }
                         // Two profiles at the SAME precedence claim one package.
                         // Picking one silently produces non-deterministic
                         // behaviour: which one loads depends on directory read
@@ -161,6 +172,13 @@ pub fn user_profile_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(base.join("liwinux").join("profiles"))
+}
+
+pub fn profile_file_name(package: &str) -> Option<String> {
+    let safe = package.len() <= 245 && package.contains('.')
+        && package.split('.').all(|part| !part.is_empty()
+            && part.bytes().all(|ch| ch.is_ascii_alphanumeric() || ch == b'_'));
+    safe.then(|| format!("cont_{package}.json"))
 }
 
 #[cfg(test)]
@@ -448,37 +466,21 @@ fn normalise_floats(item: &mut toml_edit::Item) {
 }
 
 impl Store {
-    /// The file a save for this package should land in.
-    ///
-    /// A user profile is written in place. A system or bundled one is NOT:
-    /// it is shadowed by a new user file, so a package update does not
-    /// silently discard the user's edits (and does not get overwritten by
-    /// them either).
+    /// A user profile takes precedence over the legacy TOML in the same directory.
     pub fn save_target(&self, pkg: &str) -> Option<PathBuf> {
-        match self.by_package.get(pkg) {
-            Some(e) if e.origin == Origin::User => Some(e.path.clone()),
-            _ => Some(user_profile_dir()?.join(format!("{pkg}.toml"))),
-        }
+        let dir = match self.by_package.get(pkg) {
+            Some(e) if e.origin == Origin::User => e.path.parent()?.to_path_buf(),
+            _ => user_profile_dir()?,
+        };
+        Some(dir.join(profile_file_name(pkg)?))
     }
 
-    /// Writes a profile, preserving comments. Returns the file written.
-    ///
-    /// When shadowing a system profile for the first time, the system file's
-    /// TEXT is used as the base so its comments come along — they are usually
-    /// the only explanation of what each coordinate means.
+    /// Saves the user profile atomically and leaves existing TOML files intact.
     pub fn save(&self, p: &Profile) -> Result<PathBuf, ProfileError> {
         let target = self.save_target(&p.package).ok_or_else(|| {
-            ProfileError::Edit("no user profile directory (is HOME set?)".into())
+            ProfileError::Edit("invalid package name or missing user profile directory".into())
         })?;
-        let base = match std::fs::read_to_string(&target) {
-            Ok(t) => Some(t),
-            // No user file yet: seed from the profile we are shadowing.
-            Err(_) => self.by_package.get(&p.package)
-                .and_then(|e| std::fs::read_to_string(&e.path).ok()),
-        };
-        let text = render(base.as_deref(), p)?;
-        if let Some(dir) = target.parent() { std::fs::create_dir_all(dir)?; }
-        std::fs::write(&target, text)?;
+        write_json(&target, p)?;
         Ok(target)
     }
 
@@ -499,6 +501,18 @@ impl Store {
     }
 }
 
+pub fn write_json(target: &Path, profile: &Profile) -> Result<(), ProfileError> {
+    profile.validate()?;
+    let text = serde_json::to_string_pretty(profile).map_err(|e| ProfileError::Edit(e.to_string()))?;
+    let directory = target.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    std::fs::create_dir_all(directory)?;
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    writeln!(file, "{text}")?;
+    file.as_file().sync_all()?;
+    file.persist(target).map_err(|e| e.error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod write_tests {
     use super::*;
@@ -510,6 +524,25 @@ mod write_tests {
         b.insert("jump".into(), Binding::Tap {
             trigger: Trigger::Key(57), at: Norm::new(0.9, 0.8) });
         Profile { name: "T".into(), package: "com.x".into(), bindings: b }
+    }
+
+    #[test]
+    fn json_save_shadows_legacy_and_keeps_its_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("old.toml");
+        let mut profile = sample();
+        let text = render(None, &profile).unwrap();
+        std::fs::write(&legacy, &text).unwrap();
+        let dirs = [(dir.path().to_path_buf(), Origin::User)];
+        let store = Store::from_dirs(&dirs);
+        profile.name = "Updated".into();
+        let path = store.save(&profile).unwrap();
+        assert_eq!(path, dir.path().join("cont_com.x.json"));
+        assert_eq!(std::fs::read_to_string(legacy).unwrap(), text);
+        let reloaded = Store::from_dirs(&dirs);
+        assert!(reloaded.problems.is_empty());
+        assert_eq!(reloaded.for_package("com.x").unwrap().profile.name, "Updated");
+        assert!(profile_file_name("../game").is_none());
     }
 
     /// Comments are the only place saying what a coordinate means. Losing

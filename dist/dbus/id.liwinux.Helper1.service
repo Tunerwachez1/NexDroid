@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=id.liwinux.Helper1
+Exec=/usr/local/bin/liwd-helper
+User=root
+SystemdService=liwd-helper.service

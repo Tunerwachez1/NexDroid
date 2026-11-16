@@ -608,6 +608,8 @@ async fn main() -> Result<()> {
     let mut unhealthy = 0u32;
     let mut attempts = 0u32;
     let mut was_running = false;
+    let mut boot_grace=liw_core::session::BootGrace::default();
+    let mut start_generation=sup.start_generation();
     let mut win_tick: u32 = 0;
     let mut kern_tick: u32 = 0;
     let mut kernel = liw_core::host::KernelWatch::new();
@@ -640,7 +642,15 @@ async fn main() -> Result<()> {
                 }
                 kern_tick = kern_tick.wrapping_add(1);
 
+                let generation=sup.start_generation();
+                if generation != start_generation {
+                    boot_grace=liw_core::session::BootGrace::default();
+                    start_generation=generation;
+                    unhealthy=0;
+                    was_running=false;
+                }
                 let h = sup.health().await;
+                let warming_up=boot_grace.update(&h,std::time::Instant::now(),cfg.boot_timeout);
                 // Serve the cached copy to clients and announce a change
                 // only when it actually differs; a UI bound to this must
                 // not redraw every five seconds for nothing.
@@ -658,6 +668,9 @@ async fn main() -> Result<()> {
                     if was_running { win.reset().await; }
                     was_running = false;
                     SessionState::Stopped
+                } else if warming_up {
+                    unhealthy=0;
+                    SessionState::Starting
                 } else if h.is_healthy() {
                     if unhealthy > 0 { tracing::info!("session recovered"); }
                     unhealthy = 0; attempts = 0;
@@ -731,6 +744,7 @@ async fn main() -> Result<()> {
                     if let Err(e) = sup.recover().await {
                         tracing::error!(error = %e, "recovery failed");
                     }
+                    boot_grace=liw_core::session::BootGrace::default();
                     unhealthy = 0;
                 } else if attempts >= cfg.max_recovery_attempts && unhealthy > 0 {
                     tracing::error!(

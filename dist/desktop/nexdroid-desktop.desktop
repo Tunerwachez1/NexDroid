@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NexDroid Desktop
+Name[ru]=Рабочий стол NexDroid
+Comment=Open the Android desktop in NexDroid
+Comment[ru]=Открыть рабочий стол Android в NexDroid
+Exec=liw-ui --game dev.waydroid.manager.home
+Icon=nexdroid
+Terminal=false
+Categories=Game;
+StartupWMClass=liwinux-game

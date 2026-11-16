@@ -61,16 +61,31 @@ pub enum TouchAction {
 ///
 /// The id is kept **for as long as the binding is active**; on release it goes
 /// back to the pool.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PointerPool {
     /// binding name -> pointer id
     assigned: HashMap<String, u8>,
     /// which pointer ids are in use
     in_use: [bool; MAX_POINTERS],
+    limit: usize,
+}
+
+impl Default for PointerPool {
+    fn default() -> Self {
+        Self::with_limit(MAX_POINTERS)
+    }
 }
 
 impl PointerPool {
     pub fn new() -> Self { Self::default() }
+
+    pub(crate) fn with_limit(limit: usize) -> Self {
+        Self {
+            assigned: HashMap::new(),
+            in_use: [false; MAX_POINTERS],
+            limit: limit.min(MAX_POINTERS),
+        }
+    }
 
     /// Allocates a pointer to a binding. Idempotent: returns the existing one
     /// if any. `None` if the pool is full — silently handing out a wrong id
@@ -79,7 +94,7 @@ impl PointerPool {
         if let Some(&id) = self.assigned.get(binding) {
             return Some(id);
         }
-        let id = self.in_use.iter().position(|&used| !used)? as u8;
+        let id = self.in_use[..self.limit].iter().position(|&used| !used)? as u8;
         self.in_use[id as usize] = true;
         self.assigned.insert(binding.to_string(), id);
         Some(id)
@@ -106,7 +121,7 @@ impl PointerPool {
     /// it half-done would strand a finger on screen.
     pub fn rotate(&mut self, binding: &str) -> Option<(u8, u8)> {
         let old = self.assigned.get(binding).copied()?;
-        let fresh = self.in_use.iter().position(|&u| !u)? as u8;
+        let fresh = self.in_use[..self.limit].iter().position(|&u| !u)? as u8;
         self.in_use[fresh as usize] = true;
         self.in_use[old as usize] = false;
         self.assigned.insert(binding.to_string(), fresh);

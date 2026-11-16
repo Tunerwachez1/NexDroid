@@ -12,6 +12,27 @@
 //! binding the wrong physical key is worse than saying no, because it fails
 //! silently and only during play.
 
+#[derive(Debug,PartialEq,Eq)]
+pub enum HostShortcut { ToggleFullscreen, ExitFullscreen, EditControls }
+
+pub fn host_shortcut(event: &gpui::KeyDownEvent, fullscreen: bool) -> Option<HostShortcut> {
+    if event.is_held { return None; }
+    let key=event.keystroke.key.to_ascii_lowercase();
+    let m=event.keystroke.modifiers;
+    if !m.control && !m.shift && !m.alt && !m.platform {
+        if key=="f11" { return Some(HostShortcut::ToggleFullscreen); }
+        if key=="escape" && fullscreen { return Some(HostShortcut::ExitFullscreen); }
+    }
+    if m.control && m.shift && !m.alt && !m.platform && matches!(key.as_str(),"a"|"ф"|"Ф") {
+        return Some(HostShortcut::EditControls);
+    }
+    None
+}
+
+pub fn can_capture_with(code: u16) -> bool {
+    !matches!(code, 0 | 1 | 29 | 42 | 54 | 56 | 66 | 87 | 97 | 100 | 125 | 126)
+}
+
 /// evdev code for a key gpui named, or `None` when it is not one we can map.
 pub fn evdev_code(name: &str) -> Option<u16> {
     // The letter and digit rows in evdev order. Writing them out beats
@@ -21,7 +42,16 @@ pub fn evdev_code(name: &str) -> Option<u16> {
     const ROW2: &str = "asdfghjkl";
     const ROW3: &str = "zxcvbnm";
 
-    let n = name.to_ascii_lowercase();
+    let n = name.to_lowercase();
+    // Standard Russian layout: keep the physical QWERTY positions for bindings.
+    if n.chars().count() == 1 {
+        for (row, start) in [("йцукенгшщзхъ", 16), ("фывапролджэ", 30), ("ячсмитьбю", 44)] {
+            if let Some(i) = row.chars().position(|c| n.starts_with(c)) {
+                return Some(start + i as u16);
+            }
+        }
+        if n == "ё" { return Some(41); }
+    }
     if let Some(i) = ROW1.find(&n).filter(|_| n.len() == 1) {
         return Some(16 + i as u16);
     }
@@ -61,16 +91,27 @@ pub fn evdev_code(name: &str) -> Option<u16> {
         "pagedown" => 109,
         "insert" => 110,
         "delete" => 111,
-        "minus" | "-" => 12,
-        "equal" | "=" => 13,
-        "leftbracket" | "[" => 26,
-        "rightbracket" | "]" => 27,
-        "semicolon" | ";" => 39,
-        "quote" | "'" => 40,
-        "comma" | "," => 51,
-        "period" | "." => 52,
-        "slash" | "/" => 53,
-        "backslash" | "\\" => 43,
+        "!" => 2,
+        "@" => 3,
+        "#" => 4,
+        "$" => 5,
+        "%" => 6,
+        "^" => 7,
+        "&" => 8,
+        "*" => 9,
+        "(" => 10,
+        ")" => 11,
+        "minus" | "-" | "_" => 12,
+        "equal" | "=" | "+" => 13,
+        "leftbracket" | "[" | "{" => 26,
+        "rightbracket" | "]" | "}" => 27,
+        "semicolon" | ";" | ":" => 39,
+        "quote" | "'" | "\"" => 40,
+        "grave" | "`" | "~" => 41,
+        "backslash" | "\\" | "|" => 43,
+        "comma" | "," | "<" => 51,
+        "period" | "." | ">" => 52,
+        "slash" | "/" | "?" => 53,
         f if f.starts_with('f') && f.len() <= 3 => {
             let n: u16 = f[1..].parse().ok()?;
             match n {
@@ -112,12 +153,36 @@ pub fn label(code: u16) -> String {
         54 => Some("R.Shift".into()),
         56 => Some("Alt".into()),
         57 => Some("Space".into()),
+        69 => Some("Num Lock".into()),
+        70 => Some("Scroll Lock".into()),
+        71..=73 => Some(format!("Num {}", code - 64)),
+        74 => Some("Num −".into()),
+        75..=77 => Some(format!("Num {}", code - 71)),
+        78 => Some("Num +".into()),
+        79..=81 => Some(format!("Num {}", code - 78)),
+        82 => Some("Num 0".into()),
+        83 => Some("Num .".into()),
+        55 => Some("Num *".into()),
+        96 => Some("Num Enter".into()),
         97 => Some("R.Ctrl".into()),
+        98 => Some("Num /".into()),
+        99 => Some("Print Screen".into()),
         100 => Some("R.Alt".into()),
         103 => Some("Up".into()),
         105 => Some("Left".into()),
         106 => Some("Right".into()),
         108 => Some("Down".into()),
+        102 => Some("Home".into()),
+        104 => Some("Page Up".into()),
+        107 => Some("End".into()),
+        109 => Some("Page Down".into()),
+        110 => Some("Insert".into()),
+        111 => Some("Delete".into()),
+        119 => Some("Pause".into()),
+        125 => Some("Super".into()),
+        126 => Some("R.Super".into()),
+        127 => Some("Menu".into()),
+        183..=194 => Some(format!("F{}", code - 170)),
         59..=68 => Some(format!("F{}", code - 58)),
         87 => Some("F11".into()),
         88 => Some("F12".into()),
@@ -133,6 +198,13 @@ mod tests {
     /// The codes that matter most: WASD is what nearly every profile starts
     /// from, and getting one of them wrong is a binding that silently moves
     /// the wrong way.
+    #[test]
+    fn russian_movement_keys_use_the_same_physical_positions() {
+        for (ru, en) in [("ц", "w"), ("Ф", "a"), ("ы", "s"), ("В", "d")] {
+            assert_eq!(evdev_code(ru), evdev_code(en));
+        }
+    }
+
     #[test]
     fn wasd_maps_to_the_evdev_codes_the_engine_expects() {
         assert_eq!(evdev_code("w"), Some(17));
@@ -217,5 +289,28 @@ mod tests {
         assert_eq!(label(evdev_code("w").unwrap()), "W");
         assert_eq!(label(evdev_code("a").unwrap()), "A");
         assert_eq!(label(evdev_code("z").unwrap()), "Z");
+    }
+
+    fn shortcut(key: &str,fullscreen: bool,held: bool) -> Option<HostShortcut> {
+        host_shortcut(&gpui::KeyDownEvent { keystroke:gpui::Keystroke::parse(key).unwrap(),is_held:held,prefer_character_input:false },fullscreen)
+    }
+    #[test]
+    fn f11_is_a_host_action_without_repeat_or_modified_key_capture() {
+        assert_eq!(shortcut("f11",false,false),Some(HostShortcut::ToggleFullscreen));
+        assert_eq!(shortcut("f11",true,false),Some(HostShortcut::ToggleFullscreen));
+        assert_eq!(shortcut("f11",true,true),None);
+        assert_eq!(shortcut("ctrl-f11",true,false),None);
+    }
+    #[test]
+    fn escape_only_exits_fullscreen_view() {
+        assert_eq!(shortcut("escape",true,false),Some(HostShortcut::ExitFullscreen));
+        assert_eq!(shortcut("escape",false,false),None);
+    }
+    #[test]
+    fn editor_hotkey_supports_both_initial_keyboard_layouts() {
+        assert_eq!(shortcut("ctrl-shift-a",true,false),Some(HostShortcut::EditControls));
+        assert_eq!(shortcut("ctrl-shift-ф",true,false),Some(HostShortcut::EditControls));
+        assert_eq!(shortcut("ctrl-a",false,false),None);
+        assert_eq!(shortcut("alt-ctrl-shift-a",false,false),None);
     }
 }

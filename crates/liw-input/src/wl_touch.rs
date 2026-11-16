@@ -47,6 +47,7 @@ use crate::backend::{BackendError, TouchBackend};
 use crate::touch::{TouchAction, MAX_POINTERS};
 use std::fs::File;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 /// Path of the touch pipe inside the container.
@@ -149,9 +150,25 @@ fn push_event(buf: &mut Vec<u8>, sec: i64, usec: i64, kind: u16, code: u16, valu
     buf.extend_from_slice(&value.to_ne_bytes());
 }
 
-impl TouchBackend for WlTouchBackend {
-    fn dispatch(&mut self, actions: &[TouchAction]) -> Result<(), BackendError> {
-        if actions.is_empty() { return Ok(()); }
+impl WlTouchBackend {
+    /// A FIFO reports a lost reader even when there are no events to write.
+    pub fn reader_disconnected(&self) -> bool {
+        let mut fd = libc::pollfd {
+            fd: self.pipe.as_raw_fd(),
+            events: 0,
+            revents: 0,
+        };
+        // SAFETY: fd points to one initialized pollfd for the call, and
+        // timeout zero makes this a nonblocking check.
+        let ready = unsafe { libc::poll(&mut fd, 1, 0) };
+        ready > 0 && fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
+    }
+
+    /// Returns false on backpressure so the window can retry the entire frame.
+    /// Slot state records only frames actually accepted by the FIFO.
+    pub fn try_dispatch(&mut self, actions: &[TouchAction]) -> Result<bool, BackendError> {
+        if actions.is_empty() { return Ok(true); }
+        let mut slots = self.slots;
         let (sec, usec) = monotonic();
         let mut buf: Vec<u8> = Vec::with_capacity((actions.len() * 5 + 1) * EVENT_SIZE);
 
@@ -163,7 +180,7 @@ impl TouchBackend for WlTouchBackend {
                         return Err(BackendError::Dispatch(
                             format!("invalid pointer id {id}")));
                     }
-                    self.slots[slot] = true;
+                    slots[slot] = true;
                     let (x, y) = self.to_px(at);
                     // hwcomposer's exact ordering. Press and move are the same
                     // sequence: in protocol B a new tracking_id means a press,
@@ -177,7 +194,7 @@ impl TouchBackend for WlTouchBackend {
                 TouchAction::Up { id } => {
                     let slot = id as usize;
                     if slot >= MAX_POINTERS { continue }
-                    self.slots[slot] = false;
+                    slots[slot] = false;
                     push_event(&mut buf, sec, usec, EV_ABS, ABS_MT_SLOT, slot as i32);
                     push_event(&mut buf, sec, usec, EV_ABS, ABS_MT_TRACKING_ID, -1);
                 }
@@ -196,26 +213,34 @@ impl TouchBackend for WlTouchBackend {
         }
 
         match self.pipe.write(&buf) {
-            Ok(n) if n == buf.len() => Ok(()),
+            Ok(n) if n == buf.len() => {
+                self.slots = slots;
+                Ok(true)
+            }
             Ok(n) => Err(BackendError::Dispatch(format!(
                 "partial write: {n}/{} bytes — pipe alignment broken", buf.len()))),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // Android is behind. Waiting would lock the input loop;
-                // dropping only costs one frame.
-                self.dropped += 1;
-                Ok(())
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
             Err(e) => Err(BackendError::Dispatch(format!("could not write to pipe: {e}"))),
         }
     }
 
+    pub fn release_actions(&self) -> Vec<TouchAction> {
+        self.slots.iter().enumerate().filter_map(|(id, &active)| {
+            active.then_some(TouchAction::Up { id: id as u8 })
+        }).collect()
+    }
+}
+
+impl TouchBackend for WlTouchBackend {
+    fn dispatch(&mut self, actions: &[TouchAction]) -> Result<(), BackendError> {
+        if !self.try_dispatch(actions)? {
+            self.dropped += 1;
+        }
+        Ok(())
+    }
+
     fn release_all(&mut self) -> Result<(), BackendError> {
-        let ids: Vec<u8> = (0..MAX_POINTERS)
-            .filter(|&i| self.slots[i]).map(|i| i as u8).collect();
-        if ids.is_empty() { return Ok(()); }
-        let acts: Vec<TouchAction> = ids.into_iter()
-            .map(|id| TouchAction::Up { id }).collect();
-        self.dispatch(&acts)
+        self.dispatch(&self.release_actions())
     }
 
     fn name(&self) -> &'static str { "wl_touch" }

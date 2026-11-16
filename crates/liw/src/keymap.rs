@@ -66,9 +66,8 @@ pub async fn test_profile(
     screen: (u32, u32),
     inject: bool,
 ) -> Result<()> {
-    let text = std::fs::read_to_string(&profile_path)
-        .with_context(|| format!("could not read profile: {}", profile_path.display()))?;
-    let profile = Profile::from_toml(&text).context("invalid profile")?;
+    let profile = Profile::read(&profile_path)
+        .with_context(|| format!("could not load profile: {}", profile_path.display()))?;
     println!("Profile: {} ({})", profile.name, profile.package);
     println!("Bindings: {}", profile.bindings.len());
 

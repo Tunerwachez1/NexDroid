@@ -87,7 +87,12 @@ impl Headless {
             .map_err(|e| format!("could not enumerate EGL devices: {e}"))?;
 
         let mut last = String::from("no EGL device was offered");
+        let selected = std::env::var_os("LIW_EGL_RENDER_NODE").map(std::path::PathBuf::from);
         for device in devices {
+            if device.is_software() { continue; }
+            if let Some(ref path) = selected {
+                if device.render_device_path().as_ref().ok() != Some(path) { continue; }
+            }
             // SAFETY: the display is owned by the context built from it and
             // outlives every use here.
             let display = match unsafe { EGLDisplay::new(device) } {
@@ -143,21 +148,23 @@ impl Headless {
         Ok(())
     }
 
-    /// Draws whatever `paint` puts on the target, then reads it back.
+    /// Draws whatever `paint` puts on the target, then reads it back if painted.
     ///
     /// The closure gets the renderer and its framebuffer so this module does
     /// not need to know anything about surfaces or damage; that stays with
     /// the caller, which is the only place that knows what a frame contains.
-    pub fn capture<F>(&mut self, paint: F) -> Result<Frame, String>
+    pub fn capture<F>(&mut self, paint: F) -> Result<Option<Frame>, String>
     where
-        F: FnOnce(&mut GlesRenderer, &mut GlesTarget<'_>) -> Result<(), String>,
+        F: FnOnce(&mut GlesRenderer, &mut GlesTarget<'_>) -> Result<bool, String>,
     {
         let mut fb = self
             .renderer
             .bind(&mut self.target)
             .map_err(|e| format!("could not bind the offscreen target: {e}"))?;
 
-        paint(&mut self.renderer, &mut fb)?;
+        if !paint(&mut self.renderer, &mut fb)? {
+            return Ok(None);
+        }
 
         let region = Rectangle::from_size(self.size);
         let mapping = self
@@ -172,12 +179,12 @@ impl Headless {
             .map_err(|e| format!("could not map the frame: {e}"))?;
 
         self.serial += 1;
-        Ok(Frame {
+        Ok(Some(Frame {
             width: self.size.w as u32,
             height: self.size.h as u32,
             bgra: bytes.to_vec(),
             serial: self.serial,
-        })
+        }))
     }
 }
 

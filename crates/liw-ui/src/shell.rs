@@ -22,7 +22,7 @@ impl Render for AppState {
         // TitlebarOptions.title is not applied on Wayland in this gpui
         // revision, so the launcher names itself here too.
         if !self.titled {
-            window.set_window_title("liwinux");
+            window.set_window_title("NexDroid");
             self.titled = true;
         }
         let body = content(self, &t, window, cx);
@@ -91,13 +91,13 @@ fn nav(
                         .text_size(px(11.0))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(t.bg)
-                        .child("L"),
+                        .child("N"),
                 )
                 .child(
                     div()
                         .text_size(px(14.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("liwinux"),
+                        .child("NexDroid"),
                 ),
         )
         .child(div().flex().flex_row().items_center().gap(px(S1)).children(tabs))

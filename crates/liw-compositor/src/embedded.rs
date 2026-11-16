@@ -17,9 +17,10 @@ use smithay::backend::renderer::element::surface::{
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::desktop::utils::send_frames_surface_tree;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
-use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::{EventLoop, channel};
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::socket::ListeningSocketSource;
 
@@ -35,6 +36,7 @@ pub struct Embedded {
     width: Arc<AtomicI32>,
     height: Arc<AtomicI32>,
     running: Arc<AtomicBool>,
+    keyboard: channel::Sender<(u16, bool)>,
 }
 
 impl Embedded {
@@ -49,6 +51,11 @@ impl Embedded {
 
     pub fn requested_size(&self) -> (i32, i32) {
         (self.width.load(Ordering::Relaxed), self.height.load(Ordering::Relaxed))
+    }
+
+    /// Forward an evdev key to the embedded Wayland seat.
+    pub fn key(&self, code: u16, pressed: bool) {
+        let _ = self.keyboard.send((code, pressed));
     }
 
     /// Stops the thread. The compositor's socket goes with it, so anything
@@ -67,6 +74,13 @@ impl Embedded {
 /// Returns as soon as the socket is bound, so the caller can put
 /// `WAYLAND_DISPLAY` in front of Waydroid without racing it.
 pub fn spawn(socket_name: &str, width: i32, height: i32) -> Result<Embedded, String> {
+    spawn_with_mode(socket_name,width,height,60_000)
+}
+
+pub fn spawn_with_mode(socket_name: &str, width: i32, height: i32, refresh_mhz: i32) -> Result<Embedded, String> {
+    if width < 1 || height < 1 || !(1_000..=1_000_000).contains(&refresh_mhz) {
+        return Err("Invalid native display mode".into());
+    }
     let frames: FrameSlot = Arc::new(Mutex::new(None));
     let w = Arc::new(AtomicI32::new(width.max(1)));
     let h = Arc::new(AtomicI32::new(height.max(1)));
@@ -78,13 +92,14 @@ pub fn spawn(socket_name: &str, width: i32, height: i32) -> Result<Embedded, Str
     let socket = ListeningSocketSource::with_name(socket_name)
         .map_err(|e| format!("could not bind the socket {socket_name}: {e}"))?;
 
+    let (keyboard, key_events) = channel::channel();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<GuestHandle, String>>();
 
     let (tf, tw, th, trunning) = (frames.clone(), w.clone(), h.clone(), running.clone());
     std::thread::Builder::new()
         .name("liw-compositor".into())
         .spawn(move || {
-            match run(socket, tf, tw, th, trunning, ready_tx.clone()) {
+            match run(socket, tf, tw, th, trunning.clone(), ready_tx.clone(), refresh_mhz, key_events) {
                 Ok(()) => tracing::info!("compositor thread finished"),
                 Err(e) => {
                     tracing::error!(error = %e, "compositor thread failed");
@@ -93,11 +108,12 @@ pub fn spawn(socket_name: &str, width: i32, height: i32) -> Result<Embedded, Str
                     let _ = ready_tx.send(Err(e));
                 }
             }
+            trunning.store(false,Ordering::Relaxed);
         })
         .map_err(|e| format!("could not start the compositor thread: {e}"))?;
 
     match ready_rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(Ok(guest)) => Ok(Embedded { frames, guest, width: w, height: h, running }),
+        Ok(Ok(guest)) => Ok(Embedded { frames, guest, width: w, height: h, running, keyboard }),
         Ok(Err(e)) => Err(e),
         Err(_) => Err("the compositor did not come up within ten seconds".into()),
     }
@@ -110,6 +126,8 @@ fn run(
     want_h: Arc<AtomicI32>,
     running: Arc<AtomicBool>,
     ready: std::sync::mpsc::Sender<Result<GuestHandle, String>>,
+    refresh_mhz: i32,
+    key_events: channel::Channel<(u16, bool)>,
 ) -> Result<(), String> {
     let (w0, h0) = (want_w.load(Ordering::Relaxed), want_h.load(Ordering::Relaxed));
     let mut headless = Headless::new(w0, h0)?;
@@ -120,7 +138,7 @@ fn run(
         Display::new().map_err(|e| format!("wayland display: {e}"))?;
     let dh = display.handle();
 
-    let mut state = Compositor::new(&dh, (w0, h0), 60_000);
+    let mut state = Compositor::new(&dh, (w0, h0), refresh_mhz);
     let _ = ready.send(Ok(state.guest.clone()));
 
     let output = Output::new(
@@ -133,7 +151,7 @@ fn run(
         },
     );
     output.change_current_state(
-        Some(Mode { size: (w0, h0).into(), refresh: 60_000 }),
+        Some(Mode { size: (w0, h0).into(), refresh: refresh_mhz }),
         Some(OFFSCREEN_TRANSFORM),
         Some(Scale::Fractional(1.0)),
         Some((0, 0).into()),
@@ -141,6 +159,12 @@ fn run(
     let mut damage = OutputDamageTracker::from_output(&output);
 
     let handle = event_loop.handle();
+    let start = Instant::now();
+    handle.insert_source(key_events, move |event, _, state| {
+        if let channel::Event::Msg((code, pressed)) = event {
+            state.key(code, pressed, start.elapsed().as_millis() as u32);
+        }
+    }).map_err(|e| format!("keyboard source: {e}"))?;
     handle
         .insert_source(socket, move |client, _, state: &mut Compositor| {
             match state.dh.insert_client(client, Arc::new(ClientState::default())) {
@@ -166,7 +190,6 @@ fn run(
         )
         .map_err(|e| format!("display source: {e}"))?;
 
-    let start = Instant::now();
     let mut drawn_commits = u64::MAX;
     let mut applied = (0i32, 0i32, f64::NAN);
     let mut stats = Stats::new();
@@ -194,7 +217,7 @@ fn run(
 
         if (size.0, size.1) != (applied.0, applied.1) || (fit - applied.2).abs() > 1e-9 {
             output.change_current_state(
-                Some(Mode { size: size.into(), refresh: 60_000 }),
+                Some(Mode { size: size.into(), refresh: refresh_mhz }),
                 None,
                 Some(Scale::Fractional(fit)),
                 None,
@@ -216,7 +239,6 @@ fn run(
         }
         drawn_commits = commits;
 
-        let mut element_count = 0usize;
         let painted = Instant::now();
         let result = headless.capture(|renderer, fb| {
             let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -228,35 +250,36 @@ fn run(
                     1.0,
                     Kind::Unspecified,
                 );
-            // An empty list renders a blank frame perfectly successfully. If
-            // the buffer could not be imported the client is left waiting for
-            // a wl_buffer.release that never comes, and the only visible
-            // symptom is a guest that connects and then does nothing.
-            element_count = elements.len();
+            // A new or switching Android window can commit before it has a
+            // buffer. Keep the previous picture until a frame is drawable.
+            if elements.is_empty() {
+                return Ok(false);
+            }
             damage
                 .render_output(renderer, fb, 0, &elements, [0.02, 0.02, 0.03, 1.0])
-                .map(|_| ())
+                .map(|_| true)
                 .map_err(|e| format!("render: {e}"))
         });
 
-        if let Some(line) = stats.record(painted.elapsed()) {
-            tracing::info!(
-                fps = line.fps,
-                frame_ms = line.mean_ms,
-                size = ?headless.size(),
-                "embedded frame rate",
-            );
-        }
-
         match result {
-            Ok(frame) => {
-                if element_count == 0 {
-                    tracing::warn!(
-                        commits,
-                        "rendered nothing: the surface produced no elements"
+            Ok(Some(frame)) => {
+                if let Some(line) = stats.record(painted.elapsed()) {
+                    tracing::info!(
+                        fps = line.fps,
+                        frame_ms = line.mean_ms,
+                        size = ?headless.size(),
+                        "embedded frame rate",
                     );
                 }
-                publish(&frames, frame)
+                publish(&frames, frame);
+            }
+            Ok(None) => {
+                let has_buffer = with_renderer_surface_state(&surface, |state| state.buffer().is_some());
+                if has_buffer == Some(true) {
+                    tracing::warn!(commits, "Android buffer produced no render elements");
+                } else {
+                    tracing::debug!(commits, "waiting for an Android surface buffer");
+                }
             }
             Err(e) => tracing::warn!(error = %e, "frame dropped"),
         }
@@ -292,6 +315,7 @@ mod tests {
             width: Arc::new(AtomicI32::new(1)),
             height: Arc::new(AtomicI32::new(1)),
             running: Arc::new(AtomicBool::new(true)),
+            keyboard: channel::channel().0,
         };
         e.request_size(1600, 900);
         assert_eq!(e.requested_size(), (1600, 900));
@@ -307,6 +331,7 @@ mod tests {
             width: Arc::new(AtomicI32::new(1)),
             height: Arc::new(AtomicI32::new(1)),
             running: Arc::new(AtomicBool::new(true)),
+            keyboard: channel::channel().0,
         };
         e.request_size(0, -5);
         assert_eq!(e.requested_size(), (1, 1));
@@ -320,6 +345,7 @@ mod tests {
             width: Arc::new(AtomicI32::new(1)),
             height: Arc::new(AtomicI32::new(1)),
             running: Arc::new(AtomicBool::new(true)),
+            keyboard: channel::channel().0,
         };
         assert!(e.is_running());
         e.stop();

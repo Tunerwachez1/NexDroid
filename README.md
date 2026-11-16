@@ -1,23 +1,52 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="liwinux — Android games on Linux, with keyboard, mouse and measurements" width="100%">
+  <img src="assets/banner.svg" alt="NexDroid beta — Android gaming on Linux" width="100%">
 </p>
 
 <p align="center">
-  <a href="#status"><img alt="status" src="https://img.shields.io/badge/status-early%2C%20but%20measured-f08a3c?style=flat-square"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-233%20passing-4fd1c5?style=flat-square">
+  <a href="#status"><img alt="status" src="https://img.shields.io/badge/status-public%20beta-f08a3c?style=flat-square"></a>
+  <img alt="tests" src="https://img.shields.io/badge/tests-458%20passing-4fd1c5?style=flat-square">
   <img alt="rust" src="https://img.shields.io/badge/rust-edition%202024-c8cfe4?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-9aa4c0?style=flat-square">
 </p>
 
 ---
 
-**liwinux** is an Android gaming layer for Linux. It is what GameLoop or
-BlueStacks are on Windows: you install it, your games run, your keyboard and
-mouse work, and the thing stays up.
+> [!WARNING]
+> **NexDroid is beta software.** It changes host and Waydroid services, has
+> only been exercised on a limited set of machines, and is not yet distributed
+> as a distro package. Keep backups and read the installation steps first.
+
+**NexDroid** is a Rust desktop shell and gaming layer for running Android apps
+and games through Waydroid on Linux. It puts the Android surface in a dedicated
+desktop window, adds per-game keyboard and mouse controls, exposes fullscreen
+and emulator-style tools, supervises the Waydroid session, and keeps diagnostic
+information close to the user instead of hiding it in terminal commands.
+
+NexDroid is a modified fork of
+**[Liwinux](https://github.com/Liwinux-Project/liwinux)**. The upstream Git
+history, GPL license and author credits are retained. NexDroid is not presented
+as an official Liwinux release.
+
+### Changes in the NexDroid beta
+
+- embedded Android window with a native Rust sidebar and real F11 fullscreen;
+- Russian control editor with selectable and movable touch controls;
+- per-game JSON mappings named `cont_<android.package>.json`;
+- WASD joystick, taps, aim/camera capture, left/right mouse and extended keys;
+- physical keyboard forwarding, Caps Lock and RU/EN layout state export;
+- automatic touch-pipe reconnection after Waydroid recreates its input FIFO;
+- Android desktop shortcut, Play Store workflow and NexDroid desktop branding;
+- saved display profile, fixed-aspect game window and foreground-app detection;
+- NVIDIA-oriented launch fixes plus runtime detection that does not hard-code
+  one desktop driver version;
+- 458 automated Rust tests across the current workspace.
+
+The project still uses the internal `liw`, `liwd` and `id.liwinux.*` names for
+compatibility with upstream profiles, services and D-Bus clients.
 
 Getting there takes more than a key mapper. A phone game is arm64 code
 expecting a GPU, a Play Store account, a network and a touchscreen — on a
-desktop, every one of those has to be arranged. liwinux arranges them, keeps
+desktop, every one of those has to be arranged. NexDroid arranges them, keeps
 them alive when they break, and **measures** whether any of it actually helped.
 
 ```bash
@@ -32,14 +61,14 @@ liw trace com.some.game      # find out WHY it stutters
 ## The stack
 
 <p align="center">
-  <img src="assets/stack.svg" alt="The liwinux stack from the game down to the hardware, and what liwinux does at each layer" width="100%">
+  <img src="assets/stack.svg" alt="The NexDroid stack from the game down to the hardware" width="100%">
 </p>
 
-liwinux does not ship its own Android, and it does not pretend to have written
+NexDroid does not ship its own Android, and it does not pretend to have written
 [Waydroid](https://waydro.id/), libhoudini or Mesa. What it does is make that
 stack into something you can actually play on:
 
-| Layer | What was needed | What liwinux does |
+| Layer | What was needed | What NexDroid does |
 |---|---|---|
 | **GPU** | mobile games expect a GPU; a container does not have one | sets up and verifies the NVIDIA path — ANGLE (GLES→Vulkan) over Mesa Venus. Measured on this machine: **Vulkan 1.3.341, RTX 3060, GPU rendering confirmed**, not software fallback |
 | **CPU** | games ship arm64-v8a; the host is x86_64 | installs and verifies **libhoudini 14**, then proves it with a real arm64 game rather than a synthetic check |
@@ -57,7 +86,7 @@ the tool and not in a wiki page.
 
 ---
 
-## What liwinux itself is
+## What NexDroid itself is
 
 ### An emulator that supervises rather than reimplements
 
@@ -174,7 +203,7 @@ of them helps until it has been measured.
 ## Architecture
 
 <p align="center">
-  <img src="assets/architecture.svg" alt="liwinux architecture: CLI, user daemon, root helper behind polkit, and the Waydroid container" width="100%">
+  <img src="assets/architecture.svg" alt="NexDroid architecture: CLI, user daemon, root helper, and the Waydroid container" width="100%">
 </p>
 
 Three processes, split by privilege:
@@ -196,24 +225,40 @@ authorization is asked once and the 200 Hz write traffic never crosses IPC.
 
 ---
 
-## Install
+## Build and install
 
-Needs a working Waydroid session, a Wayland compositor (developed on KWin), and
-Rust.
+NexDroid currently targets Linux with Wayland. A working Waydroid installation
+is required. The tested desktop is KWin; other compositors may need additional
+window-control integration. See [`DEPENDENCIES.txt`](DEPENDENCIES.txt) before
+building.
 
 ```bash
-git clone https://github.com/Liwinux-Project/liwinux
-cd liwinux
-cargo build --release
+git clone https://github.com/Tunerwachez1/NexDroid.git
+cd NexDroid
+cargo build --release --workspace
 
 install -Dm755 target/release/liw   ~/.local/bin/liw
 install -Dm755 target/release/liwd  ~/.local/bin/liwd
+install -Dm755 target/release/liw-ui ~/.local/bin/liw-ui
 install -Dm644 dist/systemd/liwd.service ~/.config/systemd/user/liwd.service
 install -Dm644 -t ~/.local/share/liwinux/kwin scripts/kwin/*.js
-systemctl --user enable --now liwd
+./dist/install-desktop.sh
+systemctl --user daemon-reload
+systemctl --user enable --now liwd.service
 
 sudo bash dist/install-helper.sh    # the root service, its polkit policy and D-Bus config
 ```
+
+Launch the library or the Android desktop:
+
+```bash
+liw-ui
+liw-ui --game dev.waydroid.manager.home
+```
+
+The build is locked by `Cargo.lock`. Use `cargo build --release --workspace`,
+not the shorter root command: the upstream workspace intentionally excludes the
+large UI and compositor crates from its default members.
 
 Then calibrate your keyboard and mouse — do not guess, measure:
 
@@ -236,9 +281,11 @@ to it: `scripts/poc/poc0-verify.sh` (GPU rendering), `poc1-arm.sh` (houdini),
 
 ## Status
 
-Early. It runs two real games well and every number above came off this machine,
-but it has been developed against **one** setup: CachyOS, KWin on Wayland, an
-RTX 3060 with `waydroid-nvidia`, an Intel i5-12400F.
+**Public beta.** The current branch builds and all 458 tests pass, but this is
+not a promise that every Waydroid image, GPU driver or desktop compositor works.
+The active development system is CachyOS/Arch, KWin on Wayland and Waydroid
+Android 13 with Google Apps and ARM translation. NVIDIA is the best exercised
+path. AMD and Intel need independent reports and wider testing.
 
 Known to work:
 
@@ -276,7 +323,7 @@ scripts/poc/         stack setup and verification: GPU, houdini, GAPPS, DNS
 scripts/kwin/        compositor scripts
 ```
 
-Tests are behavioural, not incidental: 233 of them, and most encode a bug that
+Tests are behavioural, not incidental: 458 of them, and most encode a bug that
 actually happened. `overlapping_snapshots_do_not_inflate_sample_count` exists
 because a measurement once reported 23560 intervals from 7997 frames.
 
@@ -284,8 +331,9 @@ because a measurement once reported 23560 intervals from 7997 frames.
 
 ## Credits
 
-liwinux stands on work it did not write, and the setup it automates is largely
-the community's:
+NexDroid is based on [Liwinux](https://github.com/Liwinux-Project/liwinux).
+Original Liwinux commits and authors remain in Git history. The project also
+stands on work from the wider community:
 
 - [Waydroid](https://waydro.id/) — the container and the Android integration
 - [waydroid-nvidia](https://github.com/rekulous/waydroid-nvidia) — the NVIDIA/Venus path
@@ -295,7 +343,10 @@ the community's:
 
 ## License
 
-GPL-3.0-or-later.
+GNU General Public License v3.0 or later (`GPL-3.0-or-later`). See
+[`LICENSE`](LICENSE) and [`FORK_NOTICE.md`](FORK_NOTICE.md). There is no
+warranty. Modified versions must preserve the license and corresponding source
+requirements.
 
 ## Desktop front end
 
@@ -339,7 +390,7 @@ The library's last two cards are **Get more games** (opens the Play Store)
 and **Install an APK** (a file picker). Aurora Store is the other sensible
 source and installs the same way.
 
-liwinux does not have a catalogue and will not grow one. Browsing Play
+NexDroid does not have a catalogue and will not grow one. Browsing Play
 needs Play API auth: the user's own Google credentials, or somebody
 else's pooled anonymous accounts like the dispenser Aurora Store runs.
 Aurora already solves that in a client built to ask the account question

@@ -12,6 +12,8 @@ pub enum WaydroidError {
     Failed { cmd: String, code: Option<i32>, stderr: String },
     #[error("waydroid is not installed (not found on PATH)")]
     NotInstalled,
+    #[error("{0}")]
+    DriverCompatibility(String),
 }
 
 /// Parsed form of `waydroid status` output.

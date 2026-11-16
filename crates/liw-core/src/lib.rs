@@ -9,6 +9,8 @@ pub mod art;
 pub mod bench;
 pub mod perf;
 pub mod config;
+pub mod display;
+pub mod nvidia;
 pub mod error;
 pub mod hostsample;
 pub mod helper;

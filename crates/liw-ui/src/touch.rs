@@ -10,24 +10,27 @@
 //! So a press becomes a finger down, a drag becomes a move, and a release
 //! becomes a finger up.
 
-use liw_input::backend::TouchBackend;
-use liw_input::touch::{Norm, TouchAction, MAX_POINTERS};
+use std::collections::VecDeque;
+use std::time::Instant;
+
+use liw_input::engine::{Engine, InputEvent, TriggerKind};
+use liw_input::profile::{Binding, Profile, Trigger};
+use liw_input::touch::{MAX_POINTERS, Norm, TouchAction};
 use liw_input::wl_touch::WlTouchBackend;
 
-/// The pointer id the mouse uses.
-///
-/// The engine's pool allocates from 0 upward, so the highest id is the last it
-/// will ever hand out — which makes this the least likely to collide. It is
-/// not a guarantee: a profile holding ten bindings at once would take it, and
-/// then a click and a mapped key would share a finger. Ten simultaneous held
-/// bindings is not a real profile, but the limit is real and is written down
-/// rather than assumed away.
+/// Reserve the highest slot for normal clicks alongside mapped keys.
 const MOUSE_ID: u8 = MAX_POINTERS as u8 - 1;
+const MAX_PENDING_FRAMES: usize = 32;
 
 /// Sends mouse presses into Android as touches.
 #[derive(Default)]
 pub struct Touch {
     backend: Option<WlTouchBackend>,
+    engine: Option<Engine>,
+    pending: VecDeque<Vec<TouchAction>>,
+    clock: Option<Instant>,
+    display: Option<(u32, u32)>,
+    pub aim_key: Option<u16>,
     /// A finger is currently down.
     down: bool,
     /// Why it is not working, if it is not. Shown rather than logged: a click
@@ -38,6 +41,22 @@ pub struct Touch {
 impl Touch {
     pub fn is_ready(&self) -> bool {
         self.backend.is_some()
+    }
+
+    /// Called by the reconnect task, so an idle pipe can be replaced before
+    /// the next click or mapped key tries to write to it.
+    pub fn check_connection(&mut self) -> bool {
+        if self.backend.as_ref().is_some_and(WlTouchBackend::reader_disconnected) {
+            tracing::debug!("Android closed the touch pipe");
+            self.disconnect();
+        }
+        self.is_ready()
+    }
+
+    fn disconnect(&mut self) {
+        self.backend = None;
+        self.release_all();
+        self.error = Some("Переподключение ввода Android…".into());
     }
 
     /// Takes an already-opened pipe.
@@ -52,6 +71,10 @@ impl Touch {
                 // whether it never opened or opened and then broke.
                 tracing::info!(width = w, height = h, "touch pipe attached");
                 self.backend = Some(b);
+                self.display = Some((w, h));
+                if let Some(engine) = self.engine.as_mut() {
+                    engine.set_aspect(w, h);
+                }
                 self.error = None;
             }
             Err(e) => {
@@ -92,44 +115,163 @@ impl Touch {
         self.down = false;
     }
 
-    /// Lifts everything. Called when the window loses the game, so a finger
-    /// cannot be left down in a session the user has walked away from.
+    /// Load the saved bindings for the foreground game window.
+    pub fn load_profile(&mut self, mut profile: Option<Profile>) {
+        self.release_all();
+        self.aim_key = profile.as_mut().and_then(|profile| {
+            let assigned = profile
+                .bindings
+                .values()
+                .find_map(|binding| match binding {
+                    Binding::Aim { toggle, .. } => Some(toggle.clone()),
+                    _ => None,
+                })?;
+            let key = match assigned {
+                Some(Trigger::Key(code)) if crate::keys::can_capture_with(code) => Some(code),
+                _ => (59..=68).chain([88]).find(|code| {
+                    crate::keys::can_capture_with(*code) && !profile
+                        .bindings
+                        .values()
+                        .any(|binding| binding.triggers().contains(&Trigger::Key(*code)))
+                }),
+            };
+            // The window toggles capture. The engine receives relative motion
+            // only while captured, so its aim no longer needs a held key.
+            for binding in profile.bindings.values_mut() {
+                if let Binding::Aim { toggle, .. } = binding {
+                    *toggle = None;
+                }
+            }
+            key
+        });
+        self.engine = profile.map(|profile| {
+            let mut engine = Engine::with_pointer_limit(profile, usize::from(MOUSE_ID));
+            if let Some((w, h)) = self.display {
+                engine.set_aspect(w, h);
+            }
+            engine.set_offscreen_ok(true);
+            engine
+        });
+    }
+
+    pub fn input(&mut self, event: InputEvent) {
+        if self.backend.is_none() {
+            return;
+        }
+        if let Some(engine) = self.engine.as_mut() {
+            let actions = engine.handle(event);
+            self.send(&actions);
+        }
+    }
+
+    pub fn has_binding(&self, trigger: &Trigger) -> bool {
+        self.engine.as_ref().is_some_and(|engine| {
+            engine.profile().bindings.values().any(|binding| binding.triggers().contains(trigger))
+        })
+    }
+
+    pub fn button(&mut self, button: Trigger, down: bool) -> bool {
+        if !self.has_binding(&button) {
+            return false;
+        }
+        let trigger = TriggerKind::from(&button);
+        self.input(if down { InputEvent::Press(trigger) } else { InputEvent::Release(trigger) });
+        true
+    }
+
+    pub fn tick(&mut self) {
+        if let Some(engine) = self.engine.as_mut().filter(|e| e.has_pending()) {
+            let now = self
+                .clock
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                .as_millis() as u64;
+            let actions = engine.tick(now);
+            self.send(&actions);
+        }
+        self.flush();
+    }
+
+    pub fn release_aim(&mut self) {
+        if let Some(engine) = self.engine.as_mut() {
+            let actions = engine.release_aim();
+            self.send(&actions);
+        }
+    }
+
+    /// Discard unsent input and lift each finger already delivered to Android.
     pub fn release_all(&mut self) {
-        if let Some(b) = self.backend.as_mut() {
-            let _ = b.release_all();
+        self.pending.clear();
+        if let Some(engine) = self.engine.as_mut() {
+            let _ = engine.set_enabled(false);
+            let _ = engine.set_enabled(true);
         }
         self.down = false;
+        if let Some(backend) = &self.backend {
+            let actions = backend.release_actions();
+            if !actions.is_empty() {
+                self.pending.push_back(actions);
+                self.flush();
+            }
+        }
     }
 
     fn send(&mut self, actions: &[TouchAction]) -> bool {
-        let Some(b) = self.backend.as_mut() else {
-            self.error.get_or_insert_with(|| {
-                "the touch pipe is not open — is the session running?".into()
-            });
+        if self.backend.is_none() {
+            self.error
+                .get_or_insert_with(|| "Ввод Android ещё не подключён.".into());
             return false;
-        };
-        match b.dispatch(actions) {
-            Ok(()) => true,
-            Err(e) => {
-                let text = e.to_string();
-                // A broken pipe means the READER is gone, and the reader is
-                // Android's EventHub inside the container. The container
-                // restarts — this very window restarts it to move the session
-                // onto its own socket — so the descriptor we were handed dies
-                // with it. Measured: every click after that fails with EPIPE
-                // and nothing says why.
-                //
-                // Dropping the backend is what makes it self-healing: the
-                // pipe task sees there is none and opens a fresh one.
-                if text.contains("Broken pipe") {
-                    tracing::info!("the touch pipe died with the container — reopening");
-                    self.backend = None;
-                    self.down = false;
+        }
+        if actions.is_empty() {
+            return true;
+        }
+        if self.pending.len() == MAX_PENDING_FRAMES {
+            self.release_all();
+            self.error =
+                Some("Android не успевает принимать касания. Нажмите клавиши снова.".into());
+            return false;
+        }
+        // Preserve frame boundaries for Down/Up, and keep only the latest
+        // position per slot when consecutive movement frames queue up.
+        if let Some(previous) = self.pending.back_mut().filter(|previous| {
+            previous
+                .iter()
+                .chain(actions)
+                .all(|action| matches!(action, TouchAction::Move { .. }))
+        }) {
+            for action in actions {
+                let TouchAction::Move { id, .. } = action else {
+                    unreachable!()
+                };
+                if let Some(old) = previous
+                    .iter_mut()
+                    .find(|old| matches!(old, TouchAction::Move { id: old_id, .. } if old_id == id))
+                {
+                    *old = *action;
                 } else {
-                    tracing::warn!(error = %text, "touch not delivered");
+                    previous.push(*action);
                 }
-                self.error = Some(text);
-                false
+            }
+        } else {
+            self.pending.push_back(actions.to_vec());
+        }
+        self.flush();
+        self.backend.is_some()
+    }
+
+    fn flush(&mut self) {
+        while let (Some(backend), Some(actions)) = (&mut self.backend, self.pending.front()) {
+            match backend.try_dispatch(actions) {
+                Ok(true) => {
+                    self.pending.pop_front();
+                    self.error = None;
+                }
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::warn!(%error, "touch pipe write failed; reconnecting");
+                    self.disconnect();
+                    return;
+                }
             }
         }
     }
@@ -157,6 +299,111 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_joystick_and_camera_share_the_pipe_and_release_independently() {
+        use std::io::Read;
+        use std::os::fd::OwnedFd;
+        use std::os::unix::net::UnixStream;
+
+        let (writer, mut reader) = UnixStream::pair().unwrap();
+        writer.set_nonblocking(true).unwrap();
+        reader.set_nonblocking(true).unwrap();
+
+        let profile = Profile::from_toml(
+            r#"
+name = "Test"
+package = "org.example.game"
+[bindings.move]
+type = "joystick"
+up = { Key = 17 }
+left = { Key = 30 }
+down = { Key = 31 }
+right = { Key = 32 }
+center = { x = 0.2, y = 0.7 }
+radius = 0.1
+[bindings.look]
+type = "aim"
+toggle = { Key = 60 }
+origin = { x = 0.7, y = 0.5 }
+sensitivity = 0.0016
+deadzone = 0.0
+"#,
+        )
+        .unwrap();
+
+        let mut touch = Touch::default();
+        touch.load_profile(Some(profile));
+        assert_eq!(touch.aim_key, Some(60));
+        touch.attach(std::fs::File::from(OwnedFd::from(writer)), 1920, 1080);
+
+        let mut frames = || {
+            let mut bytes = [0u8; 4096];
+            let mut result = Vec::new();
+            loop {
+                match reader.read(&mut bytes) {
+                    Ok(0) => break,
+                    Ok(n) => result.extend_from_slice(&bytes[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            assert_eq!(result.len() % 24, 0);
+            result
+                .chunks_exact(24)
+                .map(|event| {
+                    (
+                        u16::from_ne_bytes(event[16..18].try_into().unwrap()),
+                        u16::from_ne_bytes(event[18..20].try_into().unwrap()),
+                        i32::from_ne_bytes(event[20..24].try_into().unwrap()),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        touch.input(InputEvent::Press(TriggerKind::Key(17)));
+        touch.tick();
+        let walk = frames();
+        assert_eq!(walk.iter().filter(|event| **event == (0, 0, 0)).count(), 2);
+        assert!(walk.contains(&(3, 0x36, 756)));
+        assert!(walk.contains(&(3, 0x36, 564)));
+
+        touch.input(InputEvent::MouseMove { dx: 20.0, dy: 0.0 });
+        touch.tick();
+        touch.tick();
+        let look = frames();
+        assert!(look.contains(&(3, 0x2f, 1)));
+        assert!(look.iter().filter(|event| **event == (0, 0, 0)).count() >= 2);
+
+        touch.release_aim();
+        let release = frames();
+        assert_eq!(release, vec![(3, 0x2f, 1), (3, 0x39, -1), (0, 0, 0)]);
+
+        touch.input(InputEvent::Release(TriggerKind::Key(17)));
+        assert_eq!(frames(), vec![(3, 0x2f, 0), (3, 0x39, -1), (0, 0, 0)]);
+    }
+
+    #[test]
+    fn fire_holds_the_configured_touch_until_left_click_releases() {
+        let profile = Profile::from_toml(r#"
+name = "Test"
+package = "org.example.game"
+[bindings.fire]
+type = "fire"
+at = { x = 0.75, y = 0.5 }
+"#).unwrap();
+
+        let mut engine = Engine::new(profile);
+        assert_eq!(
+            engine.handle(InputEvent::Press(TriggerKind::MouseLeft)),
+            vec![TouchAction::Down { id: 0, at: Norm::new(0.75, 0.5) }],
+        );
+        assert!(engine.handle(InputEvent::Press(TriggerKind::MouseLeft)).is_empty());
+        assert_eq!(
+            engine.handle(InputEvent::Release(TriggerKind::MouseLeft)),
+            vec![TouchAction::Up { id: 0 }],
+        );
+    }
+
+    #[test]
     fn a_click_in_the_picture_becomes_a_position() {
         let n = to_norm((640.0, 360.0), (1280.0, 720.0)).unwrap();
         assert_eq!(n, Norm::new(0.5, 0.5));
@@ -178,8 +425,14 @@ mod tests {
     /// The corners are on the game, so they must map rather than be refused.
     #[test]
     fn the_corners_are_inside() {
-        assert_eq!(to_norm((0.0, 0.0), (100.0, 100.0)), Some(Norm::new(0.0, 0.0)));
-        assert_eq!(to_norm((100.0, 100.0), (100.0, 100.0)), Some(Norm::new(1.0, 1.0)));
+        assert_eq!(
+            to_norm((0.0, 0.0), (100.0, 100.0)),
+            Some(Norm::new(0.0, 0.0))
+        );
+        assert_eq!(
+            to_norm((100.0, 100.0), (100.0, 100.0)),
+            Some(Norm::new(1.0, 1.0))
+        );
     }
 
     /// The pool hands out from 0 upward, so the mouse takes the last id.
@@ -215,5 +468,31 @@ mod tests {
     #[test]
     fn nothing_is_ready_before_a_pipe_arrives() {
         assert!(!Touch::default().is_ready());
+    }
+
+    #[test]
+    fn a_closed_pipe_is_replaced_without_waiting_for_a_click() {
+        use std::io::Read;
+        use std::os::fd::OwnedFd;
+
+        let (reader, writer) = std::io::pipe().unwrap();
+        let mut touch = Touch::default();
+        touch.attach(std::fs::File::from(OwnedFd::from(writer)), 1920, 1080);
+        assert!(touch.check_connection());
+        touch.press(Norm::new(0.5, 0.5));
+        assert!(touch.down);
+
+        drop(reader);
+        assert!(!touch.check_connection());
+        assert!(!touch.down);
+
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        touch.attach(std::fs::File::from(OwnedFd::from(writer)), 1920, 1080);
+        touch.press(Norm::new(0.5, 0.5));
+        touch.release();
+        drop(touch);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes.len(), (6 + 3) * 24);
     }
 }

@@ -35,3 +35,7 @@ smithay = { version = "0.7", default-features = false, features = [
     # once and then waits forever for permission to draw again.
     "desktop",
 ] }
+
+[dev-dependencies]
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client"] }

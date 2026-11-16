@@ -68,6 +68,9 @@ pub enum Binding {
     /// The finger stays down while the key is held.
     Tap { trigger: Trigger, at: Norm },
 
+    /// A held left click on the game's fire button.
+    Fire { at: Norm },
+
     /// One tap on press-and-release (holding does not repeat).
     Toggle { trigger: Trigger, at: Norm },
 
@@ -179,6 +182,7 @@ impl Binding {
             Binding::Tap { trigger, .. }
             | Binding::Toggle { trigger, .. }
             | Binding::Swipe { trigger, .. } => vec![trigger.clone()],
+            Binding::Fire { .. } => vec![Trigger::MouseLeft],
             Binding::Joystick { up, down, left, right, .. } =>
                 vec![up.clone(), down.clone(), left.clone(), right.clone()],
             Binding::Aim { toggle, .. } =>
@@ -219,6 +223,8 @@ pub enum ProfileError {
     Io(#[from] std::io::Error),
     #[error("could not parse profile: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("could not parse JSON profile: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("invalid profile: {0}")]
     Invalid(String),
     #[error("could not write profile: {0}")]
@@ -226,6 +232,17 @@ pub enum ProfileError {
 }
 
 impl Profile {
+    pub fn read(path: &std::path::Path) -> Result<Self, ProfileError> {
+        let text = std::fs::read_to_string(path)?;
+        if path.extension().is_some_and(|extension| extension == "json") {
+            let profile: Profile = serde_json::from_str(&text)?;
+            profile.validate()?;
+            Ok(profile)
+        } else {
+            Self::from_toml(&text)
+        }
+    }
+
     pub fn from_toml(s: &str) -> Result<Self, ProfileError> {
         let p: Profile = toml::from_str(s)?;
         p.validate()?;

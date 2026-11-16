@@ -3307,6 +3307,8 @@ dependencies = [
  "smithay",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]
@@ -3334,6 +3336,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.4+spec-1.1.0",
@@ -3354,12 +3357,17 @@ dependencies = [
  "liw-compositor",
  "liw-core",
  "liw-input",
+ "raw-window-handle",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
+ "xkbcommon",
  "zbus",
 ]
 

@@ -18,8 +18,7 @@
 //!   SurfaceFlinger waits for it forever and Android never finishes booting.
 //!   A control run against KWin's socket, everything else identical, booted
 //!   in 15 seconds — so the seat, not the environment, was the difference.
-//!   It carries keyboard, pointer and touch capabilities and delivers no
-//!   events; being there is what the client needs.
+//!   The seat forwards keyboard input to Android’s hardware composer.
 
 use std::sync::{Arc, Mutex};
 
@@ -29,7 +28,9 @@ use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
 use smithay::reexports::wayland_server::{Client, DisplayHandle, Resource};
-use smithay::utils::Serial;
+use smithay::backend::input::KeyState;
+use smithay::input::keyboard::{FilterResult, Keycode};
+use smithay::utils::{SERIAL_COUNTER, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     with_states, CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
@@ -103,9 +104,7 @@ impl Compositor {
         output.set_preferred(mode);
         output.create_global::<Self>(dh);
 
-        // The capabilities are advertised even though nothing is ever sent
-        // through them. hwcomposer checks that a seat exists and has the
-        // capability before it will proceed; an empty seat is not enough.
+        // hwcomposer requires keyboard, pointer and touch capabilities.
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, "liwinux");
         seat.add_pointer();
@@ -128,6 +127,24 @@ impl Compositor {
             surface: None,
             size,
             running: true,
+        }
+    }
+
+    pub(crate) fn key(&mut self, code: u16, pressed: bool, time: u32) {
+        if self.surface.is_none() {
+            return;
+        }
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            // Smithay uses XKB keycodes. The Wayland event sent to hwcomposer
+            // subtracts the offset to restore the original evdev keycode.
+            keyboard.input::<(), _>(
+                self,
+                Keycode::new(u32::from(code) + 8),
+                if pressed { KeyState::Pressed } else { KeyState::Released },
+                SERIAL_COUNTER.next_serial(),
+                time,
+                |_, _, _| FilterResult::Forward,
+            );
         }
     }
 
@@ -314,7 +331,11 @@ impl XdgShellHandler for Compositor {
         });
         surface.send_configure();
 
-        self.surface = Some(surface.wl_surface().clone());
+        let wl_surface = surface.wl_surface().clone();
+        self.surface = Some(wl_surface.clone());
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, Some(wl_surface), SERIAL_COUNTER.next_serial());
+        }
         self.with_guest(|g| {
             g.connected = true;
             g.size = Some(size);
@@ -334,7 +355,13 @@ impl XdgShellHandler for Compositor {
     ) {
     }
 
-    fn toplevel_destroyed(&mut self, _surface: ToplevelSurface) {
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        if self.surface.as_ref() != Some(surface.wl_surface()) {
+            return;
+        }
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        }
         self.surface = None;
         self.with_guest(|g| {
             g.connected = false;
@@ -405,3 +432,6 @@ mod tests {
         assert!(dmabuf_formats().iter().all(|f| f.modifier == Modifier::Invalid));
     }
 }
+
+#[cfg(test)]
+mod keyboard_test;

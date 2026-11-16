@@ -57,6 +57,7 @@ pub fn show(package: &str) -> Result<()> {
         use liw_core::input::Binding::*;
         let (kind, detail) = match b {
             Tap { at, .. } => ("tap", format!("({:.2}, {:.2})", at.x, at.y)),
+            Fire { at } => ("fire", format!("({:.2}, {:.2})", at.x, at.y)),
             Toggle { at, .. } => ("toggle", format!("({:.2}, {:.2})", at.x, at.y)),
             Joystick { center, radius, .. } =>
                 ("joystick", format!("centre ({:.2}, {:.2}) r={radius:.2}", center.x, center.y)),
@@ -93,8 +94,8 @@ pub async fn which() -> Result<()> {
             println!("Profile   : NONE");
             println!();
             println!("To create a profile for this game:");
-            if let Some(d) = liw_core::input::store::user_profile_dir() {
-                println!("  {}/{}.toml", d.display(), pkg);
+            if let Some(path) = s.save_target(&pkg) {
+                println!("  {}", path.display());
             }
         }
     }
@@ -129,7 +130,8 @@ pub fn install(force: bool, from: Option<std::path::PathBuf>) -> Result<()> {
     let mut skipped = 0;
     for e in std::fs::read_dir(&src).with_context(|| format!("could not read: {}", src.display()))? {
         let p = e?.path();
-        if p.extension().is_none_or(|x| x != "toml") { continue; }
+        let Some(extension) = p.extension().and_then(|extension| extension.to_str()) else { continue };
+        if !matches!(extension, "toml" | "json") { continue; }
         let name = p.file_name().context("no file name")?;
         let target = dest.join(name);
         if target.exists() && !force {
@@ -146,7 +148,7 @@ pub fn install(force: bool, from: Option<std::path::PathBuf>) -> Result<()> {
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs()).unwrap_or(0);
-            let bak = target.with_extension(format!("toml.bak-{stamp}"));
+            let bak = target.with_extension(format!("{extension}.bak-{stamp}"));
             std::fs::copy(&target, &bak)
                 .with_context(|| format!("yedeklenemedi: {}", target.display()))?;
             println!("  backup: {}", bak.file_name().unwrap_or_default().to_string_lossy());
@@ -173,7 +175,35 @@ pub fn set_coord(package: &str, binding: &str, field: &str, x: f64, y: f64) -> R
         .with_context(|| format!("no profile for '{package}'"))?;
     let path = entry.path.clone();
 
-    let text = std::fs::read_to_string(&path)
+    if path.extension().is_some_and(|extension| extension == "json") {
+        let mut profile = entry.profile.clone();
+        let binding_data = profile.bindings.get_mut(binding)
+            .with_context(|| format!("no binding named '{binding}'"))?;
+        use liw_core::input::Binding::*;
+        let target = match (binding_data, field) {
+            (Tap { at, .. } | Toggle { at, .. } | Fire { at }, "at") => at,
+            (Aim { origin, .. }, "origin") => origin,
+            (Joystick { center, .. }, "center") => center,
+            (Swipe { from, .. }, "from") => from,
+            (Swipe { to, .. }, "to") => to,
+            _ => anyhow::bail!("binding '{binding}' has no coordinate field '{field}'"),
+        };
+        anyhow::ensure!(x.is_finite() && y.is_finite(), "coordinates must be finite");
+        *target = liw_core::input::touch::Norm { x: x as f32, y: y as f32 };
+        liw_core::input::store::write_json(&path, &profile)?;
+    } else {
+        set_toml_coord(&path, binding, field, x, y)?;
+    }
+    println!("{binding}.{field} = ({x:.3}, {y:.3})");
+    println!("dosya: {}", path.display());
+    println!();
+    println!("Restart the keymapper for the change to take effect:");
+    println!("  liw keymap stop && liw keymap start --grab");
+    Ok(())
+}
+
+fn set_toml_coord(path: &std::path::Path, binding: &str, field: &str, x: f64, y: f64) -> Result<()> {
+    let text = std::fs::read_to_string(path)
         .with_context(|| format!("could not read: {}", path.display()))?;
     let mut doc: toml_edit::DocumentMut = text.parse()
         .with_context(|| format!("could not parse TOML: {}", path.display()))?;
@@ -189,13 +219,8 @@ pub fn set_coord(package: &str, binding: &str, field: &str, x: f64, y: f64) -> R
     tbl.insert("y", toml_edit::value(y).into_value().unwrap());
     *target = toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
 
-    std::fs::write(&path, doc.to_string())
+    std::fs::write(path, doc.to_string())
         .with_context(|| format!("could not write: {}", path.display()))?;
-    println!("{binding}.{field} = ({x:.3}, {y:.3})");
-    println!("dosya: {}", path.display());
-    println!();
-    println!("Restart the keymapper for the change to take effect:");
-    println!("  liw keymap stop && liw keymap start --grab");
     Ok(())
 }
 
@@ -209,7 +234,7 @@ pub async fn poke_binding(package: &str, binding: &str, delay_s: u64) -> Result<
         .with_context(|| format!("no binding named '{binding}'"))?;
 
     let (x, y, to) = match b {
-        Binding::Tap { at, .. } | Binding::Toggle { at, .. } => (at.x, at.y, None),
+        Binding::Tap { at, .. } | Binding::Toggle { at, .. } | Binding::Fire { at } => (at.x, at.y, None),
         Binding::Aim { origin, .. } => (origin.x, origin.y, None),
         Binding::Joystick { center, radius, .. } =>
             // On a joystick, drag upward from the centre: you see both the

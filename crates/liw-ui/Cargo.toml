@@ -35,3 +35,8 @@ gpui_platform = { git = "https://github.com/WinTone01/zed", rev = "9ff17b7abd0a8
     "runtime_shaders",
 ] }
 gpui_tokio = { git = "https://github.com/WinTone01/zed", rev = "9ff17b7abd0a81a38f623cd1628208838acd661e" }
+raw-window-handle = "0.6.2"
+wayland-client = { version = "0.31.15", features = ["system"] }
+wayland-protocols = { version = "0.32.13", features = ["client", "unstable", "staging"] }
+xkbcommon = { version = "0.8.0", default-features = false, features = ["wayland"] }
+tempfile = "3.27.0"

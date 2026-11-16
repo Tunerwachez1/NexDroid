@@ -23,7 +23,7 @@ pub mod embedded;
 pub mod headless;
 pub mod state;
 
-pub use embedded::{spawn, Embedded};
+pub use embedded::{spawn, spawn_with_mode, Embedded};
 pub use headless::{fit, Frame, FrameSlot, Headless, REAL_SCREEN};
 pub use state::{Compositor, Surface};
 

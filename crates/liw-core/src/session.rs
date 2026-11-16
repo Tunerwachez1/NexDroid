@@ -93,6 +93,22 @@ impl Health {
 /// Marker in the Android log for AudioFlinger failing to publish.
 const AF_MARKER: &str = "AudioFlinger not published";
 
+/// Startup is allowed to use boot_timeout; healthy-runtime failures are not.
+#[derive(Default)]
+pub struct BootGrace {
+    began: Option<std::time::Instant>,
+    booted: bool,
+}
+impl BootGrace {
+    pub fn update(&mut self, health: &Health, now: std::time::Instant, timeout: Duration) -> bool {
+        if !health.session_running { *self=Self::default(); return false; }
+        if health.boot_completed { self.booted=true; return false; }
+        if self.booted { return false; }
+        let began=*self.began.get_or_insert(now);
+        now.saturating_duration_since(began) < timeout
+    }
+}
+
 /// Detects from the log whether the audio stack is wedged.
 ///
 /// The chain works like this and all of it was measured: the audio HAL wedges
@@ -135,6 +151,7 @@ impl Default for SupervisorConfig {
 }
 
 pub struct Supervisor {
+    start_generation: std::sync::atomic::AtomicU64,
     wd: Waydroid,
     cfg: SupervisorConfig,
     /// Wayland socket the session should attach to, when it is not the
@@ -152,7 +169,7 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn new(cfg: SupervisorConfig) -> Self {
-        Self { wd: Waydroid::new(), cfg, helper: None,
+        Self { start_generation: std::sync::atomic::AtomicU64::new(0),wd: Waydroid::new(), cfg, helper: None,
                embedded_display: Default::default() }
     }
 
@@ -167,6 +184,10 @@ impl Supervisor {
     }
 
     pub fn has_helper(&self) -> bool { self.helper.is_some() }
+
+    pub fn start_generation(&self) -> u64 {
+        self.start_generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
 
     pub fn config(&self) -> &SupervisorConfig { &self.cfg }
 
@@ -203,6 +224,7 @@ impl Supervisor {
             tracing::info!("session already running");
             return Ok(());
         }
+        crate::nvidia::preflight().map_err(WaydroidError::DriverCompatibility)?;
         let socket = self.display_to_use();
         tracing::info!(?socket, "starting session (detached)");
         let mut cmd = Command::new("setsid");
@@ -214,6 +236,7 @@ impl Supervisor {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         cmd.spawn()?.wait().await?;
+        self.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -321,6 +344,34 @@ impl Supervisor {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn startup_is_not_recovered_after_three_five_second_polls() {
+        let mut grace=super::BootGrace::default();
+        let health=super::Health { session_running:true,..Default::default() };
+        let now=std::time::Instant::now();
+        for seconds in [0,5,10,15,179] {
+            assert!(grace.update(&health,now+std::time::Duration::from_secs(seconds),std::time::Duration::from_secs(180)));
+        }
+        assert!(!grace.update(&health,now+std::time::Duration::from_secs(180),std::time::Duration::from_secs(180)));
+    }
+    #[test]
+    fn runtime_boot_loss_has_no_new_grace() {
+        let mut grace=super::BootGrace::default();
+        let now=std::time::Instant::now();
+        let mut health=super::Health { session_running:true,boot_completed:true,..Default::default() };
+        assert!(!grace.update(&health,now,std::time::Duration::from_secs(180)));
+        health.boot_completed=false;
+        assert!(!grace.update(&health,now,std::time::Duration::from_secs(180)));
+    }
+    #[test]
+    fn stopped_session_resets_startup_grace() {
+        let mut grace=super::BootGrace::default();
+        let now=std::time::Instant::now();
+        let live=super::Health { session_running:true,boot_completed:true,..Default::default() };
+        grace.update(&live,now,std::time::Duration::from_secs(180));
+        grace.update(&super::Health::default(),now,std::time::Duration::from_secs(180));
+        assert!(grace.update(&super::Health { session_running:true,..Default::default() },now,std::time::Duration::from_secs(180)));
+    }
     /// Real measurement: with the HAL wedged the log fills with this line.
     #[test]
     fn detects_wedged_audio_from_real_log() {

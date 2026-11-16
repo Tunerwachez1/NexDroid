@@ -34,26 +34,19 @@ pub enum Kind {
     Joystick,
     /// Mouse look.
     Aim,
+    Fire,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Tap, Kind::Toggle, Kind::Joystick, Kind::Aim];
+    pub const ALL: [Kind; 5] = [Kind::Tap, Kind::Toggle, Kind::Joystick, Kind::Aim, Kind::Fire];
 
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Tap => "Button",
-            Kind::Toggle => "Tap once",
-            Kind::Joystick => "Joystick",
-            Kind::Aim => "Aim",
-        }
-    }
-
-    pub fn glyph(self) -> &'static str {
-        match self {
-            Kind::Tap => "●",
-            Kind::Toggle => "◍",
-            Kind::Joystick => "✛",
-            Kind::Aim => "◎",
+            Kind::Tap => "Точка нажатия",
+            Kind::Toggle => "Одиночный тап",
+            Kind::Joystick => "Джойстик",
+            Kind::Aim => "Обзор и прицел",
+            Kind::Fire => "Стрельба · ЛКМ",
         }
     }
 
@@ -135,13 +128,17 @@ impl Mapper {
         let at = Norm::new(x, y);
         let kind = self.palette;
         let profile = self.profile.as_mut()?;
+        if kind == Kind::Fire && profile.bindings.values().any(|b| b.triggers().contains(&Trigger::MouseLeft)) {
+            self.error = Some("ЛКМ уже назначена. Переместите существующий маркер или освободите ЛКМ.".into());
+            return None;
+        }
         let key = next_key(profile);
         profile.bindings.insert(key.clone(), blank(kind, at));
         self.selected = Some(key.clone());
-        // A freshly placed control has no key yet, so go straight to waiting
-        // for one: that is what the person is about to do anyway.
-        self.binding = !matches!(kind, Kind::Aim);
+        // Buttons need a key; joysticks start with WASD and aim uses the mouse.
+        self.binding = matches!(kind, Kind::Tap | Kind::Toggle);
         self.saved = false;
+        self.error = None;
         Some(key)
     }
 
@@ -149,8 +146,55 @@ impl Mapper {
     pub fn select(&mut self, key: &str) {
         if self.profile.as_ref().is_some_and(|p| p.bindings.contains_key(key)) {
             self.selected = Some(key.to_string());
-            self.binding = false;
+            self.binding = self.binding_prompt().is_some();
         }
+    }
+
+    /// The next missing assignment, in the same order used by `take_key`.
+    pub fn binding_prompt(&self) -> Option<&'static str> {
+        let b = self.profile.as_ref()?.bindings.get(self.selected.as_ref()?)?;
+        match b {
+            Binding::Tap { trigger: Trigger::Key(0), .. }
+            | Binding::Toggle { trigger: Trigger::Key(0), .. } => Some("Нажмите клавишу или кнопку мыши"),
+            Binding::Joystick { up, left, down, right, .. } => {
+                [(up, "Вверх: нажмите W"), (left, "Влево: нажмите A"),
+                 (down, "Вниз: нажмите S"), (right, "Вправо: нажмите D")]
+                    .into_iter().find_map(|(key, prompt)| (*key == Trigger::Key(0)).then_some(prompt))
+            }
+            _ => None,
+        }
+    }
+
+    /// Restart key assignment without losing a control's position or size.
+    pub fn rebind(&mut self) {
+        let Some(b) = self.profile.as_mut().and_then(|p| p.bindings.get_mut(self.selected.as_ref()?)) else { return };
+        match b {
+            Binding::Tap { trigger, .. } | Binding::Toggle { trigger, .. } => *trigger = Trigger::Key(0),
+            Binding::Joystick { up, left, down, right, .. } => {
+                *up = Trigger::Key(0);
+                *left = Trigger::Key(0);
+                *down = Trigger::Key(0);
+                *right = Trigger::Key(0);
+            }
+            Binding::Aim { .. } => {}
+            _ => return,
+        }
+        self.binding = true;
+        self.saved = false;
+        self.error = None;
+    }
+
+    /// Apply the standard movement keys without changing geometry.
+    pub fn use_wasd(&mut self) {
+        let Some(Binding::Joystick { up, left, down, right, .. }) =
+            self.profile.as_mut().and_then(|p| p.bindings.get_mut(self.selected.as_ref()?)) else { return };
+        *up = Trigger::Key(17);
+        *left = Trigger::Key(30);
+        *down = Trigger::Key(31);
+        *right = Trigger::Key(32);
+        self.binding = false;
+        self.saved = false;
+        self.error = None;
     }
 
     /// Binds a key press to the selected control.
@@ -158,21 +202,39 @@ impl Mapper {
     /// For a joystick the four directions are filled in order, so pressing
     /// W A S D in turn sets up the whole stick without four separate steps.
     pub fn take_key(&mut self, key_name: &str) -> bool {
+        let Some(code) = crate::keys::evdev_code(key_name) else { return false };
+        self.take_trigger(Trigger::Key(code))
+    }
+
+    pub fn take_trigger(&mut self, trigger: Trigger) -> bool {
         if !self.binding {
             return false;
         }
-        let Some(code) = crate::keys::evdev_code(key_name) else { return false };
-        let Some(sel) = self.selected.clone() else { return false };
+        if matches!(trigger, Trigger::Key(0 | 1 | 66 | 87)) {
+            self.error = Some("Esc, F8 и F11 зарезервированы для окна.".into());
+            return true;
+        }
+        let Some(sel) = &self.selected else { return false };
         let Some(profile) = self.profile.as_mut() else { return false };
-        let Some(binding) = profile.bindings.get_mut(&sel) else { return false };
+        if profile.bindings.iter().any(|(name, b)| name != sel && b.triggers().contains(&trigger)) {
+            self.error = Some(format!("{} уже назначена другому элементу.", trigger_label(&trigger)));
+            return true;
+        }
+        let Some(binding) = profile.bindings.get_mut(sel) else { return false };
 
-        let trigger = Trigger::Key(code);
         match binding {
             Binding::Tap { trigger: t, .. } | Binding::Toggle { trigger: t, .. } => {
                 *t = trigger;
                 self.binding = false;
             }
             Binding::Joystick { up, down, left, right, .. } => {
+                if !matches!(trigger, Trigger::Key(_)) {
+                    return false;
+                }
+                if [&*up, &*left, &*down, &*right].contains(&&trigger) {
+                    self.error = Some("Эта клавиша уже занята другим направлением. Нажмите другую.".into());
+                    return true;
+                }
                 // Unset directions are Key(0); fill the first one still unset,
                 // in the order a person expects to press them.
                 const UNSET: Trigger = Trigger::Key(0);
@@ -188,28 +250,38 @@ impl Mapper {
                 self.binding = still_empty;
             }
             Binding::Aim { toggle, .. } => {
+                let Trigger::Key(code) = trigger else { return false };
+                if !crate::keys::can_capture_with(code) {
+                    self.error = Some("Эта клавиша зарезервирована. Выберите другую.".into());
+                    return true;
+                }
                 *toggle = Some(trigger);
                 self.binding = false;
             }
             _ => return false,
         }
         self.saved = false;
+        self.error = None;
         true
     }
 
-    /// Moves the selected control by one step.
-    ///
-    /// The reason this exists rather than "click again": a click is only as
-    /// accurate as the pointer, and the buttons being aimed at are small.
-    pub fn nudge(&mut self, dx: f32, dy: f32) -> bool {
-        let Some(sel) = self.selected.clone() else { return false };
-        let Some(profile) = self.profile.as_mut() else { return false };
-        let Some(b) = profile.bindings.get_mut(&sel) else { return false };
-        let Some(at) = position_mut(b) else { return false };
-        at.x = (at.x + dx).clamp(0.0, 1.0);
-        at.y = (at.y + dy).clamp(0.0, 1.0);
+    pub fn move_selected(&mut self, at: Norm) -> bool {
+        let Some(key) = &self.selected else { return false };
+        let Some(binding) = self.profile.as_mut().and_then(|p| p.bindings.get_mut(key)) else {
+            return false;
+        };
+        let Some(position) = position_mut(binding) else { return false };
+        if *position == at {
+            return false;
+        }
+        *position = at;
         self.saved = false;
         true
+    }
+
+    pub fn nudge(&mut self, dx: f32, dy: f32) -> bool {
+        let Some(control) = self.selection() else { return false };
+        self.move_selected(Norm::new(control.at.x + dx, control.at.y + dy))
     }
 
     /// Changes the selected control's size, where it has one.
@@ -237,6 +309,18 @@ impl Mapper {
 
     pub fn save(&mut self) {
         let Some(p) = &self.profile else { return };
+        if let Some((key, b)) = p.bindings.iter().find(|(_, b)| b.triggers().contains(&Trigger::Key(0))) {
+            let message = if matches!(b, Binding::Joystick { .. }) {
+                "Назначены не все клавиши. Завершите ввод или нажмите «Назначить WASD»."
+            } else {
+                "Назначены не все клавиши. Нажмите клавишу для выделенного элемента."
+            };
+            let key = key.clone();
+            self.select(&key);
+            self.saved = false;
+            self.error = Some(message.into());
+            return;
+        }
         match liw_input::store::Store::discover().save(p) {
             Ok(_) => {
                 self.saved = true;
@@ -244,7 +328,7 @@ impl Mapper {
             }
             Err(e) => {
                 self.saved = false;
-                self.error = Some(format!("could not save: {e}"));
+                self.error = Some(format!("Не удалось сохранить: {e}"));
             }
         }
     }
@@ -262,6 +346,11 @@ impl Mapper {
                     at,
                     radius,
                     label: face(b),
+                    directions: match b {
+                        Binding::Joystick { up, left, down, right, .. } =>
+                            Some([up, left, down, right].map(trigger_label)),
+                        _ => None,
+                    },
                     selected: self.selected.as_deref() == Some(key.as_str()),
                 })
             })
@@ -285,6 +374,7 @@ pub struct Control {
     pub radius: Option<f32>,
     /// What to write on it — the key or keys it is bound to.
     pub label: String,
+    pub directions: Option<[String; 4]>,
     pub selected: bool,
 }
 
@@ -296,8 +386,10 @@ fn blank(kind: Kind, at: Norm) -> Binding {
     match kind {
         Kind::Tap => Binding::Tap { trigger: UNSET, at },
         Kind::Toggle => Binding::Toggle { trigger: UNSET, at },
+        Kind::Fire => Binding::Fire { at },
         Kind::Joystick => Binding::Joystick {
-            up: UNSET, down: UNSET, left: UNSET, right: UNSET,
+            up: Trigger::Key(17), down: Trigger::Key(31),
+            left: Trigger::Key(30), right: Trigger::Key(32),
             center: at,
             radius: 0.12,
         },
@@ -313,6 +405,7 @@ fn blank(kind: Kind, at: Norm) -> Binding {
 fn describe(b: &Binding) -> Option<(Kind, Norm, Option<f32>)> {
     match b {
         Binding::Tap { at, .. } => Some((Kind::Tap, *at, None)),
+        Binding::Fire { at } => Some((Kind::Fire, *at, None)),
         Binding::Toggle { at, .. } => Some((Kind::Toggle, *at, None)),
         Binding::Joystick { center, radius, .. } => {
             Some((Kind::Joystick, *center, Some(*radius)))
@@ -324,7 +417,7 @@ fn describe(b: &Binding) -> Option<(Kind, Norm, Option<f32>)> {
 
 fn position_mut(b: &mut Binding) -> Option<&mut Norm> {
     match b {
-        Binding::Tap { at, .. } | Binding::Toggle { at, .. } => Some(at),
+        Binding::Tap { at, .. } | Binding::Toggle { at, .. } | Binding::Fire { at } => Some(at),
         Binding::Joystick { center, .. } => Some(center),
         Binding::Aim { origin, .. } => Some(origin),
         _ => None,
@@ -332,23 +425,28 @@ fn position_mut(b: &mut Binding) -> Option<&mut Norm> {
 }
 
 /// What is written on a control.
-fn face(b: &Binding) -> String {
-    let one = |t: &Trigger| match t {
+fn trigger_label(t: &Trigger) -> String {
+    match t {
         Trigger::Key(0) => "—".to_string(),
         Trigger::Key(c) => crate::keys::label(*c),
-        Trigger::MouseLeft => "LMB".into(),
-        Trigger::MouseRight => "RMB".into(),
-        Trigger::MouseMiddle => "MMB".into(),
+        Trigger::MouseLeft => "ЛКМ".into(),
+        Trigger::MouseRight => "ПКМ".into(),
+        Trigger::MouseMiddle => "СКМ".into(),
         Trigger::WheelUp => "W↑".into(),
         Trigger::WheelDown => "W↓".into(),
-    };
+    }
+}
+
+fn face(b: &Binding) -> String {
+    let one = trigger_label;
     match b {
         Binding::Tap { trigger, .. } | Binding::Toggle { trigger, .. } => one(trigger),
+        Binding::Fire { .. } => "ЛКМ".into(),
         Binding::Joystick { up, down, left, right, .. } => {
             format!("{}{}{}{}", one(up), one(left), one(down), one(right))
         }
         Binding::Aim { toggle, .. } => {
-            toggle.as_ref().map(one).unwrap_or_else(|| "Mouse".into())
+            toggle.as_ref().map(one).unwrap_or_else(|| "F1".into())
         }
         _ => String::new(),
     }
@@ -377,6 +475,29 @@ mod tests {
             bindings: Default::default(),
         });
         m
+    }
+
+    #[test]
+    fn physical_keys_and_mouse_buttons_survive_profile_round_trip() {
+        let mut mapper = editing();
+        let triggers = [Trigger::Key(29), Trigger::Key(110), Trigger::Key(111),
+                        Trigger::Key(82), Trigger::MouseRight];
+        for (index, trigger) in triggers.iter().enumerate() {
+            mapper.place((10.0 + index as f32, 10.0), (100.0, 100.0)).unwrap();
+            assert!(mapper.take_trigger(trigger.clone()));
+            assert!(!mapper.binding);
+        }
+        mapper.palette = Kind::Fire;
+        mapper.place((70.0, 80.0), (100.0, 100.0)).unwrap();
+        assert!(!mapper.binding);
+        assert_eq!(mapper.selection().unwrap().label, "ЛКМ");
+
+        let profile = mapper.profile.as_ref().unwrap();
+        let rendered = liw_input::store::render(None, profile).unwrap();
+        let saved = Profile::from_toml(&rendered).unwrap();
+        assert_eq!(saved.bindings, profile.bindings);
+        assert!(matches!(saved.bindings["c6"], Binding::Fire { .. }));
+        assert_eq!(saved.bindings["c6"].triggers(), vec![Trigger::MouseLeft]);
     }
 
     #[test]
@@ -430,7 +551,7 @@ mod tests {
         m.palette = Kind::Aim;
         m.place((10.0, 10.0), (100.0, 100.0));
         assert!(!m.binding);
-        assert_eq!(m.controls()[0].label, "Mouse");
+        assert_eq!(m.controls()[0].label, "F1");
     }
 
     /// A joystick takes four keys in a row, so WASD sets up the whole stick
@@ -440,12 +561,82 @@ mod tests {
         let mut m = editing();
         m.palette = Kind::Joystick;
         m.place((10.0, 10.0), (100.0, 100.0));
+        m.rebind();
         for k in ["w", "a", "s", "d"] {
             assert!(m.binding, "still collecting directions");
             assert!(m.take_key(k));
         }
         assert!(!m.binding, "four keys is a full stick");
         assert_eq!(m.controls()[0].label, "WASD");
+    }
+
+    #[test]
+    fn repeated_direction_does_not_fill_the_next_slot() {
+        let mut m = editing();
+        m.palette = Kind::Joystick;
+        m.place((10.0, 10.0), (100.0, 100.0));
+        m.rebind();
+        m.take_key("w");
+        m.take_key("w");
+        assert_eq!(m.controls()[0].label, "W———");
+        assert!(m.error.is_some());
+        assert_eq!(m.binding_prompt(), Some("Влево: нажмите A"));
+        for k in ["a", "s", "d"] { m.take_key(k); }
+        assert!(m.error.is_none());
+        assert!(m.profile.as_ref().unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn incomplete_save_resumes_assignment_without_writing() {
+        let mut m = editing();
+        m.palette = Kind::Joystick;
+        let key = m.place((10.0, 10.0), (100.0, 100.0)).unwrap();
+        m.rebind();
+        m.take_key("w");
+        m.selected = None;
+        m.binding = false;
+        m.save();
+        assert!(!m.saved);
+        assert_eq!(m.selected.as_deref(), Some(key.as_str()));
+        assert!(m.binding);
+        assert!(m.error.as_ref().unwrap().contains("Назначены не все"));
+    }
+
+    #[test]
+    fn rebinding_preserves_geometry_and_replaces_old_keys() {
+        let mut m = editing();
+        m.palette = Kind::Joystick;
+        m.place((10.0, 20.0), (100.0, 100.0));
+        m.rebind();
+        for k in ["w", "a", "s", "d"] { m.take_key(k); }
+        m.resize(0.03);
+        let before = m.selection().unwrap();
+        m.rebind();
+        assert_eq!(m.controls()[0].label, "————");
+        assert_eq!(m.selection().unwrap().at, before.at);
+        assert_eq!(m.selection().unwrap().radius, before.radius);
+        for k in ["i", "j", "k", "l"] { m.take_key(k); }
+        assert_eq!(m.controls()[0].label, "IJKL");
+        assert!(m.profile.as_ref().unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn a_new_joystick_is_ready_to_save_with_wasd() {
+        let mut m = editing();
+        m.palette = Kind::Joystick;
+        m.place((10.0, 20.0), (100.0, 100.0));
+        assert!(!m.binding);
+        assert_eq!(m.controls()[0].directions, Some(["W", "A", "S", "D"].map(str::to_string)));
+        assert!(m.profile.as_ref().unwrap().validate().is_ok());
+        m.rebind();
+        m.take_key("i");
+        let geometry = m.selection().unwrap();
+        m.use_wasd();
+        assert_eq!(m.controls()[0].label, "WASD");
+        assert_eq!(m.selection().unwrap().at, geometry.at);
+        assert_eq!(m.selection().unwrap().radius, geometry.radius);
+        assert!(!m.binding);
+        assert!(m.profile.as_ref().unwrap().validate().is_ok());
     }
 
     #[test]

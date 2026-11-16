@@ -152,8 +152,13 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(profile: Profile) -> Self {
+        Self::with_pointer_limit(profile, crate::touch::MAX_POINTERS)
+    }
+
+    /// Keeps the highest slots available to other inputs sharing this backend.
+    pub fn with_pointer_limit(profile: Profile, limit: usize) -> Self {
         Self {
-            profile, pool: PointerPool::new(), held: HashSet::new(),
+            profile, pool: PointerPool::with_limit(limit), held: HashSet::new(),
             swipes: Vec::new(), now_ms: 0,
             aspect: 16.0 / 9.0,
             aim_pending: None, joystick_pending: None,
@@ -204,6 +209,26 @@ impl Engine {
             self.swipes.clear();
             self.pool.release_all()
         } else { Vec::new() }
+    }
+
+    /// End mouse look while keeping keyboard and button gestures alive.
+    #[must_use]
+    pub fn release_aim(&mut self) -> Vec<TouchAction> {
+        self.aim_pos = None;
+        self.aim_pending = None;
+        self.aim_accum = (0.0, 0.0);
+        self.aim_down_at = None;
+        self.aim_second = None;
+        let Some((name, _)) = self.profile.bindings.iter()
+            .find(|(_, binding)| matches!(binding, Binding::Aim { .. }))
+        else {
+            return Vec::new();
+        };
+        [self.pool.release(name), self.pool.release(&second_key(name))]
+            .into_iter()
+            .flatten()
+            .map(|id| TouchAction::Up { id })
+            .collect()
     }
 
     /// Finds which binding uses a given trigger.
@@ -357,6 +382,7 @@ impl Engine {
             let expects_hold = match b {
                 Binding::Tap { trigger, .. } | Binding::Toggle { trigger, .. } =>
                     Some(TriggerKind::from(trigger)),
+                Binding::Fire { .. } => Some(TriggerKind::MouseLeft),
                 _ => None,
             };
             let Some(t) = expects_hold else { continue };
@@ -463,7 +489,7 @@ impl Engine {
         let Some((name, binding)) = self.owner(t) else { return Vec::new() };
         let (name, binding) = (name.to_string(), binding.clone());
         match binding {
-            Binding::Tap { at, .. } | Binding::Toggle { at, .. } => {
+            Binding::Tap { at, .. } | Binding::Toggle { at, .. } | Binding::Fire { at } => {
                 match self.pool.acquire(&name) {
                     Some(id) => vec![TouchAction::Down { id, at }],
                     None => {

@@ -1,0 +1,69 @@
+NexDroid beta dependencies
+==========================
+
+The project is developed on CachyOS/Arch Linux with KWin on Wayland.
+Package names differ on other distributions.
+
+Required before building
+------------------------
+- A working Waydroid installation and Android image
+- Rust stable with Cargo, edition 2024 support
+- Git
+- C/C++ build toolchain: base-devel, clang, cmake, pkgconf
+- Wayland development/runtime libraries
+- libxkbcommon and X11/XCB compatibility libraries
+- fontconfig and freetype2
+- Mesa and the Vulkan loader
+- D-Bus, systemd and polkit
+
+Arch/CachyOS build packages
+---------------------------
+sudo pacman -S --needed \
+  base-devel git rust cargo clang cmake pkgconf \
+  wayland libxkbcommon libxcb libx11 fontconfig freetype2 \
+  mesa vulkan-icd-loader dbus polkit systemd
+
+Runtime tools used by NexDroid
+------------------------------
+- waydroid
+- systemctl / systemd user services
+- dbus and polkit
+- nftables and dnsmasq for Waydroid networking diagnostics
+- procps-ng (pkill)
+- libinput tools for optional input diagnostics
+- KWin and qdbus on the currently tested desktop
+- nvidia-utils for NVIDIA telemetry (optional on AMD/Intel)
+- ufw only when the host uses UFW (optional)
+
+Arch/CachyOS runtime packages, excluding Waydroid itself
+--------------------------------------------------------
+sudo pacman -S --needed \
+  dbus polkit systemd nftables dnsmasq procps-ng libinput \
+  vulkan-icd-loader
+
+Install Waydroid using the official instructions for your distribution:
+https://docs.waydro.id/usage/install-on-desktops
+
+GPU notes
+---------
+- Install the Vulkan driver that matches the host GPU.
+- NVIDIA systems normally also need nvidia-utils.
+- AMD systems normally use vulkan-radeon.
+- Intel systems normally use vulkan-intel.
+- Do not install every Vulkan ICD blindly. Use the one required by the host.
+
+Network access during the first build
+-------------------------------------
+Cargo downloads crates from crates.io and a pinned GPUI revision from:
+https://github.com/WinTone01/zed
+
+Build everything, including the UI and embedded compositor:
+cargo build --release --workspace
+
+Run the complete test suite:
+cargo test --release --workspace
+
+License
+-------
+NexDroid is distributed under GPL-3.0-or-later and is based on Liwinux:
+https://github.com/Liwinux-Project/liwinux

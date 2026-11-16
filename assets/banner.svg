@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" role="img" aria-label="liwinux — Android games on Linux, with keyboard and mouse">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" role="img" aria-label="NexDroid beta — Android gaming on Linux">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#232838"/><stop offset="1" stop-color="#12151f"/>
@@ -11,18 +11,18 @@
 
   <!-- mark -->
   <g transform="translate(20 32) scale(0.5)">
-    <path d="M140 108 v 252 a 8 8 0 0 0 8 8 h 236"
+    <path d="M142 370 V 138 L370 370 V 138"
           fill="none" stroke="url(#amber)" stroke-width="46"
           stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M192 314 L222 314 L240 306 L262 314 L284 310 L306 158 L326 314 L352 306 L380 314"
+    <path d="M150 314 L186 314 L210 306 L236 314 L264 310 L294 184 L320 314 L348 306 L374 314"
           fill="none" stroke="#4fd1c5" stroke-width="19"
           stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
   <text x="292" y="158" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif"
-        font-size="86" font-weight="700" fill="#f2f4fa" letter-spacing="-2">liwinux</text>
+        font-size="86" font-weight="700" fill="#f2f4fa" letter-spacing="-2">NexDroid</text>
   <text x="294" y="206" font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif"
-        font-size="27" fill="#9aa4c0">Android games on Linux — keyboard, mouse, and measurements.</text>
+        font-size="27" fill="#9aa4c0">Android gaming on Linux — desktop shell, controls, and diagnostics.</text>
 
   <g font-family="DejaVu Sans Mono, Consolas, monospace" font-size="21" fill="#6f7ba0">
     <rect x="294" y="238" width="176" height="40" rx="10" fill="#1b2030" stroke="#333c54"/>
@@ -31,5 +31,7 @@
     <text x="504" y="264" fill="#ffc65c">keymapper</text>
     <rect x="648" y="238" width="196" height="40" rx="10" fill="#1b2030" stroke="#333c54"/>
     <text x="668" y="264" fill="#9aa4c0">frame timing</text>
+    <rect x="858" y="238" width="116" height="40" rx="10" fill="#322419" stroke="#74532f"/>
+    <text x="884" y="264" fill="#ffc65c">BETA</text>
   </g>
 </svg>
