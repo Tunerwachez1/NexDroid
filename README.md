@@ -47,6 +47,26 @@ as an official Liwinux release.
   one desktop driver version;
 - 458 automated Rust tests across the current workspace.
 
+## What was fixed compared with Liwinux
+
+Most of these fixes were developed before NexDroid's first public snapshot and
+were published together in the initial beta commit. The repeated link below is
+intentional: separate historical commits did not exist, so no artificial commit
+history was created after the fact.
+
+| Bug / symptom | Root cause | NexDroid fix | Commit |
+|---|---|---|---|
+| A second launch failed with `The compositor did not start` / `wayland-liw ... already in use` | Every UI process tried to own the same Wayland socket; there was no single-instance request forwarding. | Added a per-user owner lock and local command socket; later launches forward their request to the existing process. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| Touch stopped working after an Android reconnect and logged `Broken pipe (os error 32)` | Waydroid recreates `wl_touch_events`, leaving the old file descriptor connected to a dead FIFO. | The touch writer now detects failure, reopens the FIFO and reconnects without requiring a full UI restart. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| Physical typing, Caps Lock and RU/EN switching were unreliable | The embedded Wayland seat did not preserve and forward the complete keymap, layout group and modifier state. | Added physical keymap/group/modifier forwarding and keyboard-state tests. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| Existing control markers could not be selected, moved or rebound | Editor clicks only placed new controls; there was no marker hit testing or persistent selection. | Added hit testing, selection, drag/click relocation, arrow-key nudging, deletion and rebinding. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| A WASD joystick could be saved but not move the player | An incomplete four-direction assignment or duplicate trigger could reach the saved profile. | Saving now resumes missing W/A/S/D assignment and rejects incomplete or duplicate bindings. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| The wrong controls remained active after switching Android apps | Mapping followed the launch request rather than the package that was actually in the foreground. | Added `ForegroundPackage` detection, release of held input and automatic profile switching while excluding launcher/system overlays. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| Control layouts could collide between games | Legacy profiles were generic and were not consistently keyed by the Android package. | Added atomic per-package JSON profiles named `cont_<package>.json`, with JSON precedence and legacy TOML compatibility. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| The chosen window size could change after the first click or guest resize | Guest preferred-size updates overrode the host profile, while the pinned GPUI Wayland backend did not enforce `is_resizable`. | Added aspect-fit sizing and restoration of the normal window bounds, while leaving fullscreen/maximized modes alone. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| F11 hid the sidebar but did not enter real desktop fullscreen | Fullscreen was represented by a local UI flag instead of the Linux window state. | F11 now calls the native window fullscreen toggle; the sidebar follows the real state and Esc/editor mode exits it safely. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| Long high-FPS sessions accumulated rendered frames in GPU memory | Superseded Android frame images were not retired from the GPUI image atlas. | The renderer keeps only the current and preceding frame and explicitly drops older GPU images. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+
 ## Screenshots
 
 | Library | Google Play inside NexDroid |
