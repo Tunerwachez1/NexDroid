@@ -1,4 +1,8 @@
 <p align="center">
+  <strong>English</strong> · <a href="README_RU.md">Русский</a>
+</p>
+
+<p align="center">
   <img src="assets/banner.svg" alt="NexDroid beta — Android gaming on Linux" width="100%">
 </p>
 
@@ -40,6 +44,16 @@ as an official Liwinux release.
 - NVIDIA-oriented launch fixes plus runtime detection that does not hard-code
   one desktop driver version;
 - 458 automated Rust tests across the current workspace.
+
+## Screenshots
+
+| Library | Google Play inside NexDroid |
+|---|---|
+| ![NexDroid game library](assets/screenshots/library.png) | ![Google Play in the embedded Android desktop](assets/screenshots/play-store.png) |
+
+| Game window with the native sidebar | Fullscreen gameplay |
+|---|---|
+| ![Standoff 2 in the NexDroid window with controls sidebar](assets/screenshots/game-window.png) | ![Standoff 2 in NexDroid fullscreen mode](assets/screenshots/fullscreen-game.png) |
 
 The project still uses the internal `liw`, `liwd` and `id.liwinux.*` names for
 compatibility with upstream profiles, services and D-Bus clients.
