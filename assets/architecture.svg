@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 620" width="1280" height="620"
-     role="img" aria-label="liwinux architecture: CLI, user daemon, root helper behind polkit, and the Waydroid container">
+     role="img" aria-label="NexDroid architecture: CLI, user daemon, root helper behind polkit, and the Waydroid container">
   <rect width="1280" height="620" rx="20" fill="#12151f"/>
   <g font-family="DejaVu Sans, Segoe UI, Helvetica, Arial, sans-serif">
     <text x="48" y="56" font-size="26" font-weight="700" fill="#f2f4fa">Architecture</text>

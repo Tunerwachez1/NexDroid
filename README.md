@@ -86,7 +86,7 @@ stack into something you can actually play on:
 
 | Layer | What was needed | What NexDroid does |
 |---|---|---|
-| **GPU** | mobile games expect a GPU; a container does not have one | sets up and verifies the NVIDIA path — ANGLE (GLES→Vulkan) over Mesa Venus. Measured on this machine: **Vulkan 1.3.341, RTX 3060, GPU rendering confirmed**, not software fallback |
+| **GPU** | mobile games expect a GPU; a container does not have one | sets up and verifies the NVIDIA path — ANGLE (GLES→Vulkan) over Mesa Venus. Measured on this machine: **Vulkan 1.3.341, NVIDIA GeForce RTX 3050 Laptop GPU, GPU rendering confirmed**, not software fallback |
 | **CPU** | games ship arm64-v8a; the host is x86_64 | installs and verifies **libhoudini 14**, then proves it with a real arm64 game rather than a synthetic check |
 | **Android image** | Play Store does not work on the VANILLA image | scripted rebuild to **LineageOS 20 GAPPS**, with the microG/signature-spoofing traps documented |
 | **Network** | the container silently loses DNS | diagnoses and repairs it — including the case where a *foreign* nftables table hijacks DNS while your own firewall rules are perfectly correct |
@@ -299,9 +299,10 @@ to it: `scripts/poc/poc0-verify.sh` (GPU rendering), `poc1-arm.sh` (houdini),
 
 **Public beta.** The current branch builds and all 458 tests pass, but this is
 not a promise that every Waydroid image, GPU driver or desktop compositor works.
-The active development system is CachyOS/Arch, KWin on Wayland and Waydroid
-Android 13 with Google Apps and ARM translation. NVIDIA is the best exercised
-path. AMD and Intel need independent reports and wider testing.
+The active development system is CachyOS/Arch, KWin on Wayland, an
+**NVIDIA GeForce RTX 3050 Laptop GPU**, and Waydroid Android 13 with Google
+Apps and ARM translation. NVIDIA is the best exercised path. AMD and Intel
+need independent reports and wider testing.
 
 Known to work:
 

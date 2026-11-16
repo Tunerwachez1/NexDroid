@@ -19,7 +19,7 @@
         <rect x="948" y="166" width="284" height="56" rx="10" stroke="#4fd1c5"/>
       </g>
       <g fill="#c8cfe4" text-anchor="middle">
-        <text x="114"  y="200">liwinux engine</text>
+        <text x="114"  y="200">NexDroid engine</text>
         <text x="263"  y="200">uinput</text>
         <text x="409"  y="200">libinput</text>
         <text x="548"  y="200">KWin</text>
@@ -41,14 +41,14 @@
     </g>
 
     <!-- AFTER -->
-    <text x="48" y="366" font-size="15" font-weight="700" fill="#4fd1c5" letter-spacing="1.5">WHAT liwinux DOES  ·  nothing clamps</text>
+    <text x="48" y="366" font-size="15" font-weight="700" fill="#4fd1c5" letter-spacing="1.5">WHAT NexDroid DOES  ·  nothing clamps</text>
     <g font-size="15">
       <g fill="#1b2030" stroke="#3a4258">
         <rect x="48"  y="386" width="132" height="56" rx="10"/>
         <rect x="948" y="386" width="284" height="56" rx="10" stroke="#4fd1c5"/>
       </g>
       <g fill="#c8cfe4" text-anchor="middle">
-        <text x="114"  y="420">liwinux engine</text>
+        <text x="114"  y="420">NexDroid engine</text>
         <text x="1090" y="420" fill="#4fd1c5">/dev/input/wl_touch_events</text>
       </g>
       <path d="M180 414 h 750" stroke="#4fd1c5" stroke-width="3" fill="none" marker-end="url(#b)"/>

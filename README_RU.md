@@ -127,7 +127,8 @@ liw-ui --game dev.waydroid.manager.home
 NexDroid — **публичная beta**. Текущая ветка собирается, а 458 тестов
 проходят, но это не означает, что поддерживается каждый Android-образ,
 GPU-драйвер и Wayland-композитор. Лучше всего проверены CachyOS/Arch,
-KWin, Android 13, Google Apps, ARM-трансляция и NVIDIA. AMD и Intel нуждаются
+KWin, **NVIDIA GeForce RTX 3050 Laptop GPU**, Android 13, Google Apps и
+ARM-трансляция. AMD и Intel нуждаются
 в более широком независимом тестировании.
 
 ## Авторство и лицензия
