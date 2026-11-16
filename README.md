@@ -1,5 +1,7 @@
 <p align="center">
-  <strong>English</strong> · <a href="README_RU.md">Русский</a>
+  <strong>English</strong>
+  &nbsp;·&nbsp;
+  <a href="README_RU.md"><strong><kbd>🇷🇺 Читать на русском</kbd></strong></a>
 </p>
 
 <p align="center">
