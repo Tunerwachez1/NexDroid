@@ -45,6 +45,11 @@ as an official Liwinux release.
 - saved display profile, fixed-aspect game window and foreground-app detection;
 - NVIDIA-oriented launch fixes plus runtime detection that does not hard-code
   one desktop driver version;
+- embedded settings for performance, display, graphics, devices, preferences,
+  phone identity, shortcuts, debugging and project information;
+- Russian and English settings UI with custom JSON language imports;
+- managed Magisk root with per-app approval and verified enable/disable hooks;
+- authenticated network ADB, tap/pointer diagnostics and Pixel 6/7/8 profiles;
 - 458 automated Rust tests across the current workspace.
 
 ## What was fixed compared with Liwinux
@@ -66,6 +71,10 @@ history was created after the fact.
 | The chosen window size could change after the first click or guest resize | Guest preferred-size updates overrode the host profile, while the pinned GPUI Wayland backend did not enforce `is_resizable`. | Added aspect-fit sizing and restoration of the normal window bounds, while leaving fullscreen/maximized modes alone. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
 | F11 hid the sidebar but did not enter real desktop fullscreen | Fullscreen was represented by a local UI flag instead of the Linux window state. | F11 now calls the native window fullscreen toggle; the sidebar follows the real state and Esc/editor mode exits it safely. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
 | Long high-FPS sessions accumulated rendered frames in GPU memory | Superseded Android frame images were not retired from the GPUI image atlas. | The renderer keeps only the current and preceding frame and explicitly drops older GPU images. | [`0c5984c`](https://github.com/Tunerwachez1/NexDroid/commit/0c5984cde7a6bd16b6cb55dbcfe340b77c0cbfed) |
+| The window sometimes stayed black with “Android input is not connected” while the container was healthy | The UI treated cached daemon health as proof that the new window owned the Android session, while Android could still be attached to the previous compositor socket. | Added an atomic embedded-display handoff: stop the old session, assign the new owner/socket, and report ready only after a new frame and input connection. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
+| At 1920×1080 and high refresh rates such as 360 Hz, the picture could crop or stretch | The host framebuffer size was advertised as a new native Android output and the damage tracker used a 1:1 scale. | Native Android resolution is now independent from window size; frames are scaled locally with the correct damage scale and aspect ratio. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
+| Saving CPU and memory limits requested the administrator password every time | Each save was treated as a new privileged action without a narrow persistent grant for NexDroid settings. | Added a dedicated PolicyKit action for fixed Android settings and a root-owned per-UID remembered grant. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
+| Network ADB could remain stuck in `stopping` | Android init reported a transitional state while a hung `adbd` process remained without a usable TCP listener. | The helper checks the real port 5555 listener, waits for a clean stop, terminates only a stuck `adbd`, then starts and verifies it again. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
 
 ## Screenshots
 
