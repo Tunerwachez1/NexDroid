@@ -23,6 +23,44 @@ pub struct HelperClient {
 }
 
 impl HelperClient {
+    pub async fn set_root_enabled(&self,enabled:bool)->Result<(),HelperError> {
+        self.proxy.call("SetRootEnabled",&(enabled,)).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn prepare_root(&self)->Result<(),HelperError> {
+        self.proxy.call("PrepareRoot",&()).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn advanced_settings(&self)->Result<String,HelperError> {
+        self.proxy.call("AdvancedSettings",&()).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn set_advanced_settings(&self,adb:bool,touches:bool,pointer:bool)->Result<String,HelperError> {
+        self.proxy.call("SetAdvancedSettings",&(adb,touches,pointer)).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn restore_advanced_settings(&self)->Result<(),HelperError> {
+        self.proxy.call("RestoreAdvancedSettings",&()).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn set_phone_profile(&self, id: &str) -> Result<(),HelperError> {
+        self.proxy.call("SetPhoneProfile",&(id,)).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn phone_profile(&self) -> Result<String,HelperError> {
+        self.proxy.call("PhoneProfile",&()).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn set_camera(&self, selection: &str) -> Result<(),HelperError> {
+        self.proxy.call("SetCamera",&(selection,)).await.map_err(|e|HelperError::Call(e.to_string()))
+    }
+    pub async fn graphics_info(&self) -> Result<crate::graphics::AndroidGraphics, HelperError> {
+        let json: String = self.proxy.call("GraphicsInfo", &()).await.map_err(|e| HelperError::Call(e.to_string()))?;
+        serde_json::from_str(&json).map_err(|e| HelperError::Call(e.to_string()))
+    }
+    pub async fn set_refresh_rate(&self, fps: u32) -> Result<(), HelperError> {
+        self.proxy.call("SetRefreshRate", &(fps,)).await.map_err(|e| HelperError::Call(e.to_string()))
+    }
+    pub async fn set_display_density(&self, dpi: u32) -> Result<(), HelperError> {
+        self.proxy.call("SetDisplayDensity", &(dpi,)).await.map_err(|e| HelperError::Call(e.to_string()))
+    }
+    pub async fn set_resources(&self, cpus: u32, memory_mib: u32) -> Result<(), HelperError> {
+        self.proxy.call("SetResources", &(cpus, memory_mib)).await
+            .map_err(|e| HelperError::Call(e.to_string()))
+    }
     /// Connects to the helper. Returns `Err` if the service is not running.
     pub async fn connect() -> Result<Self, HelperError> {
         let conn = Connection::system().await?;

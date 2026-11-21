@@ -156,7 +156,7 @@ fn run(
         Some(Scale::Fractional(1.0)),
         Some((0, 0).into()),
     );
-    let mut damage = OutputDamageTracker::from_output(&output);
+    let mut damage = OutputDamageTracker::new((w0,h0), 1.0, OFFSCREEN_TRANSFORM);
 
     let handle = event_loop.handle();
     let start = Instant::now();
@@ -208,21 +208,18 @@ fn run(
             .map(|g| (g.commits, g.size))
             .unwrap_or((0, None));
 
-        // Fit the guest into whatever size the host asked for. Android does
-        // not take its size from our wl_output — it reads
-        // waydroid.display_width/height, set from the host display — so the
-        // guest is almost always a different size from the view.
-        let (gw, gh) = guest_size.unwrap_or(size);
+        // Keep the advertised native output independent of the render target.
+        // Window resizing scales pixels locally without hotplugging Android.
+        let (gw, gh) = guest_size.unwrap_or((w0,h0));
         let (fit, _shown) = crate::headless::fit((gw, gh), size);
 
         if (size.0, size.1) != (applied.0, applied.1) || (fit - applied.2).abs() > 1e-9 {
-            output.change_current_state(
-                Some(Mode { size: size.into(), refresh: refresh_mhz }),
-                None,
-                Some(Scale::Fractional(fit)),
-                None,
-            );
-            damage = OutputDamageTracker::from_output(&output);
+            // Smithay computes surface dimensions from the damage tracker's
+            // scale too. Passing 1.0 here crops the native buffer to the
+            // smaller host framebuffer even when tree locations use `fit`.
+            damage = OutputDamageTracker::new(size, fit, OFFSCREEN_TRANSFORM);
+            // Resizing replaces the framebuffer, including for a static app.
+            drawn_commits = u64::MAX;
             applied = (size.0, size.1, fit);
             tracing::info!(guest = ?(gw, gh), view = ?size, fit, "fitted");
         }

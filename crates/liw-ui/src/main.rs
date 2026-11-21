@@ -22,6 +22,11 @@ mod shell;
 mod diagnostics;
 mod keymap;
 mod settings;
+mod performance;
+mod shortcuts;
+mod advanced;
+mod about;
+mod display_settings;
 mod state;
 mod theme;
 mod instance;
@@ -35,21 +40,25 @@ use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 /// Intel then fails even though Android itself renders correctly on NVIDIA.
 fn prepare_graphics_environment() -> anyhow::Result<()> {
     use std::os::unix::process::CommandExt;
+    // Standalone settings never import Android frames and must remain usable
+    // for repairing a selection after a GPU is removed or replaced.
+    if std::env::args().any(|arg| arg == "--settings") { return Ok(()); }
     let cfg = std::fs::read_to_string("/var/lib/waydroid/waydroid.cfg").unwrap_or_default();
-    if !liw_core::nvidia::source_native_selected(&cfg) { return Ok(()); }
+    let source_native = liw_core::nvidia::source_native_selected(&cfg);
+    let devices = liw_core::graphics::discover();
+    let settings = liw_core::graphics::GraphicsSettings::load().map_err(anyhow::Error::msg)?;
+    let Some(device) = settings.select(&devices, source_native).map_err(anyhow::Error::msg)? else { return Ok(()); };
     let nvidia = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json";
     let mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
-    anyhow::ensure!(std::path::Path::new(nvidia).is_file(),"NVIDIA EGL userspace is missing");
+    let proprietary_nvidia = device.vendor == "0x10de" && device.driver == "nvidia";
+    if proprietary_nvidia { anyhow::ensure!(std::path::Path::new(nvidia).is_file(),"NVIDIA EGL userspace is missing"); }
     // WGPU probes GL as well as Vulkan. Keep Mesa available for the host
     // display while preferring the proprietary EGL device for guest import.
-    let vendors = if std::path::Path::new(mesa).is_file() { format!("{nvidia}:{mesa}") } else { nvidia.into() };
-    let mut nodes: Vec<_> = std::fs::read_dir("/sys/class/drm")?.filter_map(Result::ok)
-        .filter(|p|p.file_name().to_string_lossy().starts_with("renderD")).collect();
-    nodes.sort_by_key(|p|p.file_name());
-    let device = nodes.into_iter().find(|p|std::fs::read_to_string(p.path().join("device/vendor")).is_ok_and(|s|s.trim()=="0x10de"))
-        .ok_or_else(||anyhow::anyhow!("NVIDIA render node is unavailable"))?;
-    let id = std::fs::read_to_string(device.path().join("device/device"))?.trim().to_owned();
-    let node = format!("/dev/dri/{}",device.file_name().to_string_lossy());
+    let vendors = if proprietary_nvidia {
+        if std::path::Path::new(mesa).is_file() { format!("{nvidia}:{mesa}") } else { nvidia.into() }
+    } else { anyhow::ensure!(std::path::Path::new(mesa).is_file(),"Mesa EGL userspace is missing"); mesa.into() };
+    let id = device.device.clone();
+    let node = device.node.display().to_string();
     let requested = [("__EGL_VENDOR_LIBRARY_FILENAMES",vendors),("ZED_DEVICE_ID",id),("LIW_EGL_RENDER_NODE",node)];
     if requested.iter().all(|(k,v)|std::env::var(k).as_deref()==Ok(v.as_str())) { return Ok(()); }
     let error = std::process::Command::new(std::env::current_exe()?)
@@ -59,8 +68,20 @@ fn prepare_graphics_environment() -> anyhow::Result<()> {
 
 fn main() {
     if let Err(error) = prepare_graphics_environment() {
-        eprintln!("Cannot prepare NVIDIA graphics: {error}");
+        eprintln!("Cannot prepare graphics: {error}");
         std::process::exit(1);
+    }
+    if std::env::args().any(|arg| arg == "--settings") {
+        gpui_platform::application().run(|cx: &mut App| {
+            gpui_tokio::init(cx);
+            if let Err(error) = performance::open(cx) {
+                eprintln!("Cannot open settings: {error}");
+                cx.quit();
+            }
+            cx.on_window_closed(|cx, _| { if cx.windows().is_empty() { cx.quit(); } }).detach();
+            cx.activate(true);
+        });
+        return;
     }
     let mut args=std::env::args().skip(1);
     let mut requested=None;

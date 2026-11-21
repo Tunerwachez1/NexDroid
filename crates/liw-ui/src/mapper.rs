@@ -210,8 +210,8 @@ impl Mapper {
         if !self.binding {
             return false;
         }
-        if matches!(trigger, Trigger::Key(0 | 1 | 66 | 87)) {
-            self.error = Some("Esc, F8 и F11 зарезервированы для окна.".into());
+        if matches!(trigger, Trigger::Key(0 | 1)) {
+            self.error = Some("Esc зарезервирована для отмены редактирования.".into());
             return true;
         }
         let Some(sel) = &self.selected else { return false };

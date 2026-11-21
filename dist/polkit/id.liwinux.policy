@@ -118,4 +118,23 @@
     </defaults>
   </action>
 
+  <action id="id.liwinux.helper.resources">
+    <description>Remember permission to change NexDroid Android settings</description>
+    <description xml:lang="ru">Запомнить разрешение на настройки Android в NexDroid</description>
+    <message>Authenticate once to allow this user to change NexDroid Android settings, including CPU, memory, display, phone profile, debugging, Magisk root and external camera</message>
+    <message xml:lang="ru">Подтвердите один раз разрешение изменять настройки Android NexDroid: CPU, память, экран, профиль телефона, отладку, root Magisk и внешнюю камеру</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+  <action id="id.liwinux.helper.saved-settings">
+    <description>Use an existing NexDroid settings permission in the active local session</description>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
 </policyconfig>

@@ -47,6 +47,7 @@ pub struct Android {
 /// Counts frames taken, and reports once a second.
 #[derive(Default)]
 struct Meter {
+    fps: f32,
     taken: u32,
     polls: u32,
     since: Option<Instant>,
@@ -69,6 +70,7 @@ impl Meter {
             polls = self.polls as f32 / elapsed.as_secs_f32(),
             "frames reaching the window",
         );
+        self.fps = self.taken as f32 / elapsed.as_secs_f32();
         self.taken = 0;
         self.polls = 0;
         self.since = Some(Instant::now());
@@ -76,6 +78,7 @@ impl Meter {
 }
 
 impl Android {
+    pub fn fps(&self) -> f32 { self.meter.fps }
     /// The GPUI sprite atlas does not evict RenderImage entries on Arc drop.
     /// Retain the current and preceding rendered frame; retire older entries
     /// only during render, never while a cached scene still uses them.

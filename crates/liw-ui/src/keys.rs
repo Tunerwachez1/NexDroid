@@ -12,25 +12,8 @@
 //! binding the wrong physical key is worse than saying no, because it fails
 //! silently and only during play.
 
-#[derive(Debug,PartialEq,Eq)]
-pub enum HostShortcut { ToggleFullscreen, ExitFullscreen, EditControls }
-
-pub fn host_shortcut(event: &gpui::KeyDownEvent, fullscreen: bool) -> Option<HostShortcut> {
-    if event.is_held { return None; }
-    let key=event.keystroke.key.to_ascii_lowercase();
-    let m=event.keystroke.modifiers;
-    if !m.control && !m.shift && !m.alt && !m.platform {
-        if key=="f11" { return Some(HostShortcut::ToggleFullscreen); }
-        if key=="escape" && fullscreen { return Some(HostShortcut::ExitFullscreen); }
-    }
-    if m.control && m.shift && !m.alt && !m.platform && matches!(key.as_str(),"a"|"ф"|"Ф") {
-        return Some(HostShortcut::EditControls);
-    }
-    None
-}
-
 pub fn can_capture_with(code: u16) -> bool {
-    !matches!(code, 0 | 1 | 29 | 42 | 54 | 56 | 66 | 87 | 97 | 100 | 125 | 126)
+    !matches!(code, 0 | 1 | 29 | 42 | 54 | 56 | 97 | 100 | 125 | 126)
 }
 
 /// evdev code for a key gpui named, or `None` when it is not one we can map.
@@ -291,26 +274,4 @@ mod tests {
         assert_eq!(label(evdev_code("z").unwrap()), "Z");
     }
 
-    fn shortcut(key: &str,fullscreen: bool,held: bool) -> Option<HostShortcut> {
-        host_shortcut(&gpui::KeyDownEvent { keystroke:gpui::Keystroke::parse(key).unwrap(),is_held:held,prefer_character_input:false },fullscreen)
-    }
-    #[test]
-    fn f11_is_a_host_action_without_repeat_or_modified_key_capture() {
-        assert_eq!(shortcut("f11",false,false),Some(HostShortcut::ToggleFullscreen));
-        assert_eq!(shortcut("f11",true,false),Some(HostShortcut::ToggleFullscreen));
-        assert_eq!(shortcut("f11",true,true),None);
-        assert_eq!(shortcut("ctrl-f11",true,false),None);
-    }
-    #[test]
-    fn escape_only_exits_fullscreen_view() {
-        assert_eq!(shortcut("escape",true,false),Some(HostShortcut::ExitFullscreen));
-        assert_eq!(shortcut("escape",false,false),None);
-    }
-    #[test]
-    fn editor_hotkey_supports_both_initial_keyboard_layouts() {
-        assert_eq!(shortcut("ctrl-shift-a",true,false),Some(HostShortcut::EditControls));
-        assert_eq!(shortcut("ctrl-shift-ф",true,false),Some(HostShortcut::EditControls));
-        assert_eq!(shortcut("ctrl-a",false,false),None);
-        assert_eq!(shortcut("alt-ctrl-shift-a",false,false),None);
-    }
 }

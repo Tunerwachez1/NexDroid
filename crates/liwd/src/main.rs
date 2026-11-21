@@ -47,6 +47,12 @@ struct Manager {
 
 #[interface(name = "id.liwinux.Manager1")]
 impl Manager {
+    async fn attach_embedded_display(&self,name:&str,owner:&str)->Result<(),Error> {
+        self.sup.attach_display(name,owner).await.map_err(|e|Error::Failed(e.to_string()))
+    }
+    async fn detach_embedded_display(&self,owner:&str)->Result<(),Error> {
+        self.sup.detach_display(owner).await.map_err(|e|Error::Failed(e.to_string()))
+    }
     /// Starts the session detached. A no-op if it is already running.
     async fn start(&self) -> Result<(), Error> {
         self.sup.start_detached().await.map_err(|e| Error::Failed(e.to_string()))
@@ -141,7 +147,7 @@ impl Manager {
         // Refuse early with a NAME the client can act on. `waydroid app
         // launch` against a stopped session fails with prose about D-Bus
         // that tells the user nothing about what to do.
-        if !self.health.read().await.session_running {
+        if !self.sup.status().await.map_err(|e|Error::Failed(e.to_string()))?.session_running() {
             return Err(Error::NoSession(
                 "the session is stopped — start it before launching an app".into()));
         }
@@ -741,7 +747,7 @@ async fn main() -> Result<()> {
                         let m = iface.get().await;
                         let _ = m.state_changed(iface.signal_emitter()).await;
                     }
-                    if let Err(e) = sup.recover().await {
+                    if let Err(e) = sup.recover_if_generation(start_generation).await {
                         tracing::error!(error = %e, "recovery failed");
                     }
                     boot_grace=liw_core::session::BootGrace::default();

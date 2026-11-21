@@ -26,6 +26,10 @@ sudo pacman -S --needed \
 Runtime tools used by NexDroid
 ------------------------------
 - waydroid
+- pactl with JSON support (PulseAudio client 15 or newer)
+- a PulseAudio server or pipewire-pulse for per-Waydroid audio routing
+- Linux V4L2 and an Android external-camera HAL for camera selection
+- pciutils for optional human-readable GPU names (numeric IDs work without it)
 - systemctl / systemd user services
 - dbus and polkit
 - nftables and dnsmasq for Waydroid networking diagnostics
@@ -67,3 +71,11 @@ License
 -------
 NexDroid is distributed under GPL-3.0-or-later and is based on Liwinux:
 https://github.com/Liwinux-Project/liwinux
+
+Optional Android debugging client
+---------------------------------
+The Advanced tab controls Android's adbd directly through the helper.
+To connect from a Linux terminal, also install the adb client:
+- Arch Linux: android-tools
+- Debian / Ubuntu: adb
+Use the container address displayed by NexDroid and approve the computer key in Android.

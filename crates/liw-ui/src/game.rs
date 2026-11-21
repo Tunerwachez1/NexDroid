@@ -55,6 +55,8 @@ enum KeyRoute {
 }
 
 pub struct GameView {
+    settings: Option<gpui::Entity<crate::performance::Performance>>,
+    settings_open: bool,
     pub android: Android,
     pub mapper: Mapper,
     pub sidebar_open: bool,
@@ -90,7 +92,12 @@ pub struct GameView {
     titled: bool,
     android_ready: bool,
     boot_in_flight: bool,
+    display_owner: String,
     launches: crate::instance::LaunchGate,
+    performance: crate::performance::Preferences,
+    shortcuts:crate::shortcuts::Shortcuts,
+    shortcut_error:String,
+    preferences_checked: std::time::Instant,
 }
 
 impl GameView {
@@ -102,6 +109,8 @@ impl GameView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut v = Self {
+            settings:None,
+            settings_open:false,
             android: Android::default(),
             mapper: Mapper::default(),
             sidebar_open: false,
@@ -126,9 +135,15 @@ impl GameView {
             titled: false,
             android_ready: false,
             boot_in_flight: false,
+            display_owner: format!("{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()),
             launches: Default::default(),
+            performance: crate::performance::Preferences::load(),
+            shortcuts:crate::shortcuts::Shortcuts::load().unwrap_or_default(),
+            shortcut_error:String::new(),
+            preferences_checked: std::time::Instant::now(),
         };
         window.focus(&v.focus,cx);
+        if v.performance.fullscreen_start && !window.is_fullscreen() { v.toggle_fullscreen(window,cx); }
         match liw_core::display::GuestDisplay::load() {
             Ok(mode) => v.android.start(mode),
             Err(error) => v.android.error = Some(error),
@@ -141,6 +156,7 @@ impl GameView {
             v.stop_android_on_close(cx);
         }
         v.report_focus(window, cx);
+        v.watch_audio(cx);
         // Read-only QA of the frame delivered to GPUI; absent in normal runs.
         if let Some(path) = std::env::var_os("LIW_CAPTURE_PATH") {
             cx.spawn(async move |view,cx| {
@@ -183,7 +199,7 @@ impl GameView {
                 v.drag_offset = None;
                 cx.notify();
             }
-            report(active, cx);
+            report(active && !v.settings_open, cx);
         })
         .detach();
     }
@@ -220,13 +236,11 @@ impl GameView {
             if let Some(e) = v.android.embedded.take() {
                 e.stop();
             }
+            let owner=v.display_owner.clone();
             let task = gpui_tokio::Tokio::spawn(cx, async move {
                 let Ok(m) = liw_core::manager::Manager::connect().await else { return };
-                // Clear the display FIRST. If the stop is what fails, the
-                // name of a socket that no longer exists must not be left
-                // behind for the next session to be started against.
-                let _ = m.set_embedded_display("").await;
-                let _ = m.session_stop().await;
+                // A delayed close callback must not stop a replacement window.
+                let _ = m.detach_embedded_display(&owner).await;
                 tracing::info!("game window closed — Android stopped");
             });
             task.detach();
@@ -249,31 +263,21 @@ impl GameView {
     fn bring_up_android(&mut self, cx: &mut Context<Self>) {
         if self.boot_in_flight { return; }
         self.boot_in_flight=true;
+        self.android_ready=false;
+        let previous_frame=self.android.image.as_ref().map(|(serial,_)|*serial);
+        let owner=self.display_owner.clone();
         let task = gpui_tokio::Tokio::spawn(cx, async move {
             let m = liw_core::manager::Manager::connect().await
                 .map_err(|e| e.to_string())?;
-            m.set_embedded_display(crate::android::SOCKET).await
-                .map_err(|e| e.to_string())?;
-
-            // Waydroid reads WAYLAND_DISPLAY once, at session start, so a
-            // session already attached elsewhere has to be restarted to move.
-            let running = m.snapshot().await
-                .map(|s| s.state == "RUNNING")
-                .unwrap_or(false);
-            tracing::debug!(running, "bring-up: session state read");
-            if running {
-                m.session_stop().await.map_err(|e| e.to_string())?;
-                // Waydroid needs the old session to actually be gone before a
-                // new one will bind; starting into the tail of a stop leaves
-                // the container half up and the socket unused.
-                for _ in 0..40 {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    if !m.snapshot().await.map(|s| s.state == "RUNNING").unwrap_or(true) {
-                        break;
-                    }
-                }
-            }
-            m.session_start().await.map_err(|e| e.to_string())?;
+            let camera_warning = match liw_core::devices::DeviceSettings::load() {
+                Ok(settings) => match liw_core::helper::HelperClient::connect().await {
+                    Ok(helper) => helper.set_camera(&settings.camera).await.err().map(|e|e.to_string()),
+                    Err(e) => Some(e.to_string()),
+                },
+                Err(e) => Some(e),
+            };
+            m.attach_embedded_display(crate::android::SOCKET,&owner).await
+                .map_err(|e|e.to_string())?;
             tracing::debug!("bring-up: session started");
 
             // Wait for Android before launching. This is the ordering that
@@ -283,13 +287,12 @@ impl GameView {
             // desktop's socket. The game then appeared in a window of
             // Waydroid's own while this one stayed empty.
             let mut booted = false;
+            let helper=liw_core::HelperClient::connect().await.map_err(|e|e.to_string())?;
             for i in 0..90 {
                 tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                match m.snapshot().await {
-                    Ok(s) if s.health.boot_completed => { booted = true; break; }
-                    Ok(s) if i % 10 == 0 => tracing::debug!(
-                        state = %s.state, booted = s.health.boot_completed,
-                        "bring-up: waiting for Android"),
+                match helper.boot_completed().await {
+                    Ok(true) => { booted = true; break; }
+                    Ok(false) if i % 10 == 0 => tracing::debug!("bring-up: waiting for Android"),
                     Err(e) if i % 10 == 0 => tracing::warn!(
                         error = %e, "bring-up: cannot read the daemon"),
                     _ => {}
@@ -298,13 +301,17 @@ impl GameView {
             if !booted {
                 return Err("Android did not finish booting".to_string());
             }
-            Ok::<(),String>(())
+            let display = crate::display_settings::DisplaySettings::load().map_err(|e| e.to_string())?;
+            helper.set_display_density(display.dpi).await.map_err(|e| e.to_string())?;
+            let debug_warning=helper.restore_advanced_settings().await.err().map(|e|format!("Debug: {e}"));
+            let warnings=camera_warning.map(|e|format!("Camera: {e}")).into_iter().chain(debug_warning).collect::<Vec<_>>();
+            Ok::<Option<String>,String>((!warnings.is_empty()).then(||warnings.join(" · ")))
         });
         cx.spawn(async move |this, cx| {
-            let r = match task.await {
-                Ok(Ok(())) => None,
-                Ok(Err(e)) => Some(e),
-                Err(e) => Some(e.to_string()),
+            let (r,camera_warning) = match task.await {
+                Ok(Ok(warning)) => (None,warning),
+                Ok(Err(e)) => (Some(e),None),
+                Err(e) => (Some(e.to_string()),None),
             };
             if let Some(e) = r {
                 let _ = this.update(cx, |v, cx| {
@@ -313,10 +320,43 @@ impl GameView {
                     cx.notify();
                 });
             } else {
+                // The launcher/app creates the first useful Android surface.
+                // Waiting for that surface before launching it is a deadlock.
+                let Ok(package)=this.update(cx,|view,_|view.package.clone()) else {return;};
+                let launched=package.clone();
+                let launch=gpui_tokio::Tokio::spawn(cx,async move {
+                    let manager=liw_core::Manager::connect().await.map_err(|e|e.to_string())?;
+                    manager.launch(&package).await.map_err(|e|e.to_string())
+                }).await;
+                if !matches!(launch,Ok(Ok(()))) {
+                    let _=this.update(cx,|view,cx| {
+                        view.boot_in_flight=false;
+                        view.android.error=Some(format!("Не удалось открыть приложение Android: {launch:?}"));
+                        cx.notify();
+                    });
+                    return;
+                }
+                // Boot completion alone does not prove Android reached THIS
+                // compositor. Do not report a ready view with no surface.
+                let mut connected=false;
+                for _ in 0..120 {
+                    match this.update(cx,|v,_|v.android.image.as_ref().map(|(serial,_)|*serial).is_some_and(|serial|Some(serial)!=previous_frame)
+                        && v.android.guest_size().is_some() && v.touch.is_ready()) {
+                        Ok(true)=>{connected=true;break;},Ok(false)=>{},Err(_)=>return,
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                }
                 let _=this.update(cx,|view,cx| {
                     view.boot_in_flight=false;
+                    if !connected {
+                        view.android.error=Some("Android загрузился, но не подключил изображение или ввод к этому окну. Нажмите «Переподключить».".into());
+                        cx.notify();return;
+                    }
                     view.android_ready=true;
-                    view.launch_selected(cx);
+                    tracing::info!(owner=%view.display_owner,"Android view ready: new frame and input connected");
+                    if let Some(warning)=camera_warning { view.capture_message=Some(warning); }
+                    view.restore_resource_limits(cx);
+                    if view.package!=launched {view.launch_selected(cx);}
                 });
             }
         })
@@ -332,7 +372,7 @@ impl GameView {
         let package=self.package.clone();
         let task=gpui_tokio::Tokio::spawn(cx,async move {
             let manager=liw_core::manager::Manager::connect().await.map_err(|e|e.to_string())?;
-            if !manager.snapshot().await.map_err(|e|e.to_string())?.health.session_running {
+            if !manager.live_status().await.map_err(|e|e.to_string())?.session_running() {
                 return Ok(false);
             }
             manager.launch(&package).await.map_err(|e|e.to_string())?;
@@ -350,6 +390,60 @@ impl GameView {
                     _ => {},
                 }
             });
+        }).detach();
+    }
+
+    fn restore_resource_limits(&mut self, cx: &mut Context<Self>) {
+        if !crate::performance::directory().join("performance.json").exists() { return; }
+        let preferences = crate::performance::Preferences::load();
+        cx.spawn(async move |view, cx| {
+            let result = gpui_tokio::Tokio::spawn(cx, async move {
+                let helper = liw_core::helper::HelperClient::connect().await.map_err(|e| e.to_string())?;
+                helper.set_resources(preferences.cpus, preferences.memory_mib).await.map_err(|e| e.to_string())
+            }).await;
+            if !matches!(result, Ok(Ok(()))) {
+                let _ = view.update(cx, |v, cx| {
+                    v.capture_message = Some(format!("CPU/RAM: {result:?}"));
+                    cx.notify();
+                });
+            }
+        }).detach();
+    }
+
+    fn watch_audio(&mut self,cx: &mut Context<Self>) {
+        cx.spawn(async move |view,cx| {
+            let mut previous=None;
+            let mut previous_error=String::new();
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+                match view.update(cx,|v,_|v.android_ready) { Ok(true)=>{},Ok(false)=>continue,Err(_)=>break }
+                let last=previous.clone();
+                let result=gpui_tokio::Tokio::spawn(cx,async move {
+                    if !liw_core::devices::DeviceSettings::path().exists() { return Ok(None); }
+                    let settings=liw_core::devices::DeviceSettings::load()?;
+                    if settings.audio_sink.is_none() && settings.audio_source.is_none() && last.as_ref()==Some(&settings) { return Ok(Some(settings)); }
+                    liw_core::devices::route(&settings).await?;
+                    Ok::<_,String>(Some(settings))
+                }).await;
+                match result {
+                    Ok(Ok(settings))=>{
+                        previous=settings;
+                        if !previous_error.is_empty() {
+                            let recovered=std::mem::take(&mut previous_error);
+                            let _=view.update(cx,|v,cx| {
+                                if v.capture_message.as_ref()==Some(&recovered) { v.capture_message=None;cx.notify(); }
+                            });
+                        }
+                    },
+                    result=>{
+                        let error=format!("Audio routing: {result:?}");
+                        if error!=previous_error {
+                            previous_error=error.clone();
+                            let _=view.update(cx,|v,cx|{v.capture_message=Some(error);cx.notify();});
+                        }
+                    }
+                }
+            }
         }).detach();
     }
 
@@ -423,6 +517,11 @@ impl GameView {
                 v.poll_keyboard(window, cx);
                 v.poll_mouse(cx);
                 v.touch.tick();
+                if v.preferences_checked.elapsed() >= std::time::Duration::from_secs(1) {
+                    v.performance = crate::performance::Preferences::load();
+                    v.reload_shortcuts();
+                    v.preferences_checked = std::time::Instant::now();
+                }
                 if v.android.poll() {
                     cx.notify();
                 }
@@ -512,6 +611,20 @@ impl GameView {
             self.touch.button(Trigger::MouseLeft, false);
         }
         self.capture_message = None;
+    }
+
+    fn screenshot(&mut self,cx: &mut Context<Self>) {
+        let result=(|| -> Result<std::path::PathBuf,String> {
+            let dir=self.performance.screenshot_directory();
+            std::fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
+            let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos();
+            let path=dir.join(format!("NexDroid-{stamp}.png"));
+            self.android.save_frame(&path)?;
+            Ok(path)
+        })();
+        let label=if self.performance.language=="ru" {"Снимок экрана"} else {"Screenshot"};
+        self.capture_message=Some(match result {Ok(path)=>format!("{label}: {}",path.display()),Err(e)=>format!("{label}: {e}")});
+        cx.notify();
     }
 
     fn mouse_captured(&self) -> bool {
@@ -643,13 +756,18 @@ impl GameView {
             Ok(events) => {
                 for event in events {
                     match event {
-                        KeyEvent::Key { code, pressed } if window.is_window_active() => {
+                        KeyEvent::Key {code,pressed} if self.settings_open => {
+                            if !pressed {self.held_keys.remove(&code);}
+                            if let Some(settings)=&self.settings {settings.update(cx,|s,cx|s.physical_shortcut_key(code,pressed,cx));}
+                        }
+                        KeyEvent::Key { code, pressed } if window.is_window_active() && !self.settings_open => {
                             self.route_key(code, pressed, window, cx);
                         }
                         KeyEvent::FocusLost => {
                             self.release_mouse();
                             self.release_keys();
                             self.held_keys.clear();
+                            if let Some(settings)=&self.settings {settings.update(cx,|s,_|s.use_physical_shortcuts(true));}
                             self.touch.release_all();
                             cx.notify();
                         }
@@ -663,11 +781,25 @@ impl GameView {
                 self.held_keys.clear();
                 self.touch.release_all();
                 self.keyboard = None;
+                if let Some(settings)=&self.settings {settings.update(cx,|s,_|s.use_physical_shortcuts(false));}
             }
         }
     }
 
     fn route_key(&mut self, code: u16, pressed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.route_key_with_modifiers(code,pressed,None,window,cx);
+    }
+    fn reload_shortcuts(&mut self) {
+        match crate::shortcuts::Shortcuts::load() {
+            Ok(config)=>{self.shortcuts=config;self.shortcut_error.clear();},
+            Err(e)=>{let error=e.to_string();if self.shortcut_error!=error {tracing::warn!(%error,"invalid shortcuts.json; retaining the last valid shortcuts");self.shortcut_error=error;}}
+        }
+    }
+    fn shortcut_hint(&self,action:crate::shortcuts::Action)->String {
+        self.shortcuts.label(action,self.touch.aim_key).map(|s|format!(" · {s}")).unwrap_or_default()
+    }
+    fn route_key_with_modifiers(&mut self, code:u16,pressed:bool,event_modifiers:Option<u8>,window:&mut Window,cx:&mut Context<Self>) {
+        if self.settings_open { return; }
         let trigger = Trigger::Key(code);
         if !pressed {
             match self.held_keys.remove(&code) {
@@ -684,29 +816,33 @@ impl GameView {
         if self.held_keys.contains_key(&code) {
             return;
         }
-        let ctrl = [29, 97].iter().any(|key| self.held_keys.contains_key(key));
-        let shift = [42, 54].iter().any(|key| self.held_keys.contains_key(key));
-        let alt_or_super = [56, 100, 125, 126].iter().any(|key| self.held_keys.contains_key(key));
+        use crate::shortcuts::{Action,CTRL,SHIFT,ALT,SUPER};
+        let held=|codes:&[u16]|codes.iter().any(|key|self.held_keys.contains_key(key));
+        let modifiers=event_modifiers.unwrap_or_else(||u8::from(held(&[29,97]))*CTRL | u8::from(held(&[42,54]))*SHIFT | u8::from(held(&[56,100]))*ALT | u8::from(held(&[125,126]))*SUPER);
         self.held_keys.insert(code, KeyRoute::Shortcut);
-
+        if let Some(action)=self.shortcuts.resolve(code,modifiers,self.touch.aim_key) {
+            let handled=match action {
+                Action::Fullscreen=>{self.toggle_fullscreen(window,cx);true},
+                Action::Settings=>{self.open_settings(window,cx);true},
+                Action::Editor=>{self.toggle_mapping(window,cx);true},
+                Action::Screenshot=>{self.screenshot(cx);true},
+                Action::TextInput if !self.mapper.is_on()=>{self.toggle_text_input(cx);true},
+                Action::CaptureMouse if !self.editing_foreground() && !self.text_input=>{self.toggle_mouse(window);cx.notify();true},
+                _=>false,
+            };
+            if handled {return;}
+        }
         match code {
-            30 if ctrl && shift && !alt_or_super => self.toggle_mapping(window, cx),
-            66 if !self.mapper.is_on() && !ctrl && !shift && !alt_or_super => self.toggle_text_input(cx),
-            87 if !ctrl && !shift && !alt_or_super => self.toggle_fullscreen(window, cx),
-            1 if self.pointer_lock.as_ref().is_some_and(PointerLock::requested) => {
+            1 if self.performance.escape_mouse && self.pointer_lock.as_ref().is_some_and(PointerLock::requested) => {
                 self.release_mouse();
                 cx.notify();
             }
-            1 if window.is_fullscreen() => {
+            1 if self.performance.escape_fullscreen && window.is_fullscreen() => {
                 self.sidebar_open = true;
                 self.toggle_fullscreen(window, cx);
             }
             _ if self.editing_foreground() => {
                 self.editor_key(code);
-                cx.notify();
-            }
-            _ if !self.text_input && self.touch.aim_key == Some(code) && !alt_or_super => {
-                self.toggle_mouse(window);
                 cx.notify();
             }
             _ if !self.text_input && self.touch.has_binding(&trigger) => {
@@ -745,6 +881,10 @@ impl GameView {
     }
 
     fn on_key_up(&mut self, ev: &gpui::KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            if let Some(code)=crate::keys::evdev_code(&ev.keystroke.key) { self.held_keys.remove(&code); }
+            cx.stop_propagation(); return;
+        }
         if self.keyboard.is_none() && window.is_window_active() {
             if let Some(code) = crate::keys::evdev_code(&ev.keystroke.key) {
                 self.route_key(code, false, window, cx);
@@ -753,17 +893,43 @@ impl GameView {
     }
 
     fn on_key(&mut self, ev: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open { cx.stop_propagation(); return; }
         if self.keyboard.is_none() && !ev.is_held && window.is_window_active() {
-            if matches!(crate::keys::host_shortcut(ev, window.is_fullscreen()), Some(crate::keys::HostShortcut::EditControls)) {
-                self.toggle_mapping(window, cx);
-            } else if let Some(code) = crate::keys::evdev_code(&ev.keystroke.key) {
-                self.route_key(code, true, window, cx);
+            if let Some(code) = crate::keys::evdev_code(&ev.keystroke.key) {
+                self.route_key_with_modifiers(code,true,Some(crate::shortcuts::event_modifiers(ev)),window,cx);
             }
         }
         // Physical Wayland events already reach the input router.
         cx.stop_propagation();
     }
 
+    fn open_settings(&mut self,window: &mut Window,cx: &mut Context<Self>) {
+        self.release_mouse();
+        self.release_keys();
+        self.touch.release_all();
+        self.drag_offset=None;
+        if self.settings.is_none() {
+            let settings=cx.new(crate::performance::Performance::embedded);
+            cx.subscribe_in(&settings,window,|v,_,_: &crate::performance::SettingsClosed,window,cx| {
+                v.settings_open=false;
+                v.performance=crate::performance::Preferences::load();
+                v.reload_shortcuts();
+                if let Some(keyboard)=&mut v.keyboard {
+                    for event in keyboard.poll().unwrap_or_default() {
+                        if let KeyEvent::Key {code,pressed:false}=event { v.held_keys.remove(&code); }
+                    }
+                }
+                window.focus(&v.focus,cx);
+                report(window.is_window_active(),cx);
+                cx.notify();
+            }).detach();
+            self.settings=Some(settings);
+        }
+        self.settings_open=true;
+        if let Some(settings)=&self.settings { settings.update(cx,|s,cx|{s.set_capture_key(self.touch.aim_key);s.use_physical_shortcuts(self.keyboard.is_some());s.focus(window,cx);}); }
+        report(false,cx);
+        cx.notify();
+    }
 }
 
 impl Render for GameView {
@@ -808,11 +974,16 @@ impl Render for GameView {
             .text_color(t.text)
             .font_family("sans-serif")
             .child(div().flex_1().h_full().child(picture(self, &t, shown, cx)))
+            .when(self.performance.show_fps, |el| el.child(
+                div().absolute().top(px(8.)).left(px(8.)).px(px(8.)).py(px(4.))
+                    .bg(t.bg.opacity(0.85)).text_color(t.ok)
+                    .child(SharedString::from(format!("{:.0} FPS", self.android.fps())))
+            ))
             .when(!fullscreen, |el| el.child(sidebar(self, &t, cx)))
             .when(fullscreen && !self.mouse_captured(),|el| el.child(
                 div().id("show-panel").absolute().top(px(8.)).left(px(8.))
                     .px(px(10.)).py(px(6.)).rounded(px(RADIUS)).bg(t.bg).text_size(px(12.)).cursor_pointer()
-                    .child("Выйти из полного экрана · F11")
+                    .child(SharedString::from(format!("Выйти из полного экрана{}",self.shortcut_hint(crate::shortcuts::Action::Fullscreen))))
                     .on_click(cx.listener(|v,_,window,cx| {
                         v.sidebar_open=true;
                         if window.is_fullscreen() { v.toggle_fullscreen(window, cx); }
@@ -820,15 +991,22 @@ impl Render for GameView {
                     }))
             ))
             .when(self.text_input && !self.mapper.is_on(), |el| {
-                el.child(capture_notice(&t, "Ввод текста · F8 — управление".into()))
+                el.child(capture_notice(&t, format!("Ввод текста{} — управление",self.shortcut_hint(crate::shortcuts::Action::TextInput))))
             })
             .when(self.mouse_captured(), |el| {
-                let key = self.touch.aim_key.map(crate::keys::label).unwrap_or_default();
-                el.child(capture_notice(&t, format!("Мышь захвачена · {key} / Esc")))
+                let key = self.shortcuts.label(crate::shortcuts::Action::CaptureMouse,self.touch.aim_key).unwrap_or_default();
+                let escape=if self.performance.escape_mouse {" / Esc"} else {""};
+                el.child(capture_notice(&t, format!("Мышь захвачена · {key}{escape}")))
             })
             .when_some(self.capture_message.clone().or_else(|| self.touch.error.clone()), |el, message| {
                 el.child(capture_notice(&t, message))
             })
+            .when_some(self.settings.clone().filter(|_|self.settings_open),|el,settings| el.child(
+                div().id("embedded-settings-overlay").absolute().inset_0().occlude()
+                    .flex().items_center().justify_center().p(px(12.)).bg(t.bg.opacity(0.85))
+                    .child(div().size_full().max_w(px(1000.)).max_h(px(760.)).overflow_hidden()
+                        .rounded(px(8.)).border_1().border_color(t.border).child(settings))
+            ))
     }
 }
 
@@ -846,7 +1024,13 @@ fn picture(
     cx: &mut Context<GameView>,
 ) -> gpui::AnyElement {
     let body = match (&v.android.error, &v.android.image) {
-        (Some(why), _) => message(t, "Не удалось запустить Android", why),
+        (Some(why), _) => div().size_full().flex().flex_col().items_center().justify_center().gap(px(12.))
+            .child(message(t, "Не удалось подключить Android", why))
+            .when(v.android.running(),|s|s.child(div().id("retry-android").px(px(14.)).py(px(9.)).rounded(px(6.)).bg(t.raised).cursor_pointer().child("Переподключить")
+                .on_click(cx.listener(|v,_,_,cx| {
+                    if v.android.running() {v.android.error=None;v.bring_up_android(cx);}
+                    cx.notify();
+                })))).into_any_element(),
         (None, Some((_, image))) => div()
             .size_full()
             .child(gpui::img(gpui::ImageSource::Render(image.clone())).size_full())
@@ -1093,6 +1277,10 @@ fn rail(v: &GameView, t: &Theme, cx: &mut Context<GameView>) -> gpui::AnyElement
         .child(tool(t, "r-map", "⌨", v.mapper.is_on() || v.edit_requested, cx,
                     |v, window, cx| v.toggle_mapping(window, cx)))
         .child(tool(t, "r-full", "⛶", false, cx, GameView::toggle_fullscreen))
+        .child(div().flex_1())
+        .child(div().id("r-settings").size(px(32.)).cursor_pointer()
+            .child(crate::performance::gear(t.text_muted))
+            .on_click(cx.listener(|v, _, window, cx|v.open_settings(window,cx))))
         .into_any_element()
 }
 
@@ -1153,15 +1341,11 @@ fn idle(v: &GameView, t: &Theme, cx: &mut Context<GameView>) -> gpui::AnyElement
         }))
         .child(head(t, "Управление"))
         .when_some(v.foreground.as_deref(), |el, package| el.child(note(t, package)))
-        .child(action(t, "text-input", if v.text_input {
-            "Вернуться к управлению · F8"
-        } else {
-            "Ввод текста · F8"
-        }, cx, |v, cx| v.toggle_text_input(cx)))
+        .child(action(t, "text-input", &format!("{}{}",if v.text_input {"Вернуться к управлению"} else {"Ввод текста"},v.shortcut_hint(crate::shortcuts::Action::TextInput)), cx, |v, cx| v.toggle_text_input(cx)))
         .when_some(v.touch.aim_key, |el, key| {
-            el.child(row(t, "Захват мыши", &crate::keys::label(key)))
+            el.child(row(t, "Захват мыши", &v.shortcuts.label(crate::shortcuts::Action::CaptureMouse,Some(key)).unwrap_or_else(||"Отключено".into())))
         })
-        .child(note(t, "Нажмите значок клавиатуры или Ctrl + Shift + A, чтобы настроить управление."))
+        .child(note(t, &format!("Редактор управления{} — или нажмите значок клавиатуры.",v.shortcut_hint(crate::shortcuts::Action::Editor))))
         .into_any_element()
 }
 
@@ -1464,6 +1648,12 @@ pub fn open(
     icon: Option<std::path::PathBuf>,
     cx: &mut App,
 ) -> anyhow::Result<()> {
+    let (title,icon)=if title==package {
+        match liw_core::apps::discover().into_iter().find(|app|app.package==package) {
+            Some(app)=>(app.name,icon.or(app.icon)),
+            None=>(title,icon),
+        }
+    } else { (title,icon) };
     if let Some(window)=cx.windows().iter().find_map(|w|w.downcast::<GameView>()) {
         window.update(cx,|view,window,cx| {
             window.activate_window();

@@ -9,6 +9,11 @@
 //! its own polkit action and validates its inputs.
 
 mod net;
+mod resources;
+mod camera;
+mod phone;
+mod advanced;
+mod root;
 
 use anyhow::Result;
 use liw_core::{polkit_check, valid_prop_key};
@@ -54,6 +59,29 @@ struct Helper {
 }
 
 impl Helper {
+    /// Only the verified Waydroid payload cgroup can be changed.
+    async fn apply_resources(&self, cpus: u32, memory_mib: u32,
+        hdr: Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        self.authorize(&hdr, "id.liwinux.helper.resources", true).await?;
+        let out = Command::new("/usr/bin/lxc-info")
+            .args(["-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "-pH"])
+            .output().await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse()
+            .map_err(|_| zbus::fdo::Error::Failed("Waydroid is not running".into()))?;
+        let raw = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        let relative = raw.lines().find_map(|s| s.strip_prefix("0::/"))
+            .ok_or_else(|| zbus::fdo::Error::Failed("cgroup v2 is required".into()))?;
+        let path = std::path::Path::new("/sys/fs/cgroup").join(relative).canonicalize()
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        if path.file_name().and_then(|s| s.to_str()) != Some("lxc.payload.waydroid")
+            || !path.starts_with("/sys/fs/cgroup") {
+            return Err(zbus::fdo::Error::Failed("Unexpected Waydroid payload cgroup".into()));
+        }
+        resources::apply(&path, cpus, memory_mib)
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
     /// Android ekran boyutu (`waydroid.display_width`/`height`).
     ///
     /// NOT the host window size: the touch pipe's coordinate space is the
@@ -90,9 +118,26 @@ impl Helper {
     {
         let caller = hdr.sender()
             .ok_or_else(|| zbus::fdo::Error::AuthFailed("no caller identity".into()))?;
+        // Remember only the narrow Android-settings permission for this UID.
+        // Polkit still verifies that every caller belongs to an active local
+        // session. The root-owned grant survives helper and desktop restarts.
+        let grant = if action == "id.liwinux.helper.resources" {
+            polkit_check(&self.conn, caller.as_str(), "id.liwinux.helper.saved-settings", false)
+                .await.map_err(|e| zbus::fdo::Error::AccessDenied(e.to_string()))?;
+            let bus = zbus::Proxy::new(&self.conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
+                .await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+            let uid: u32 = bus.call("GetConnectionUnixUser", &(caller.as_str(),))
+                .await.map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+            let path = std::path::Path::new("/var/lib/nexdroid/settings-grants").join(uid.to_string());
+            if settings_grant_exists(&path) { return Ok(()); }
+            Some(path)
+        } else { None };
         tracing::debug!(caller = %caller, action, interactive, "polkit sorgusu");
         match polkit_check(&self.conn, caller.as_str(), action, interactive).await {
             Ok(()) => {
+                if let Some(path) = grant {
+                    remember_settings_grant(&path).map_err(|e| zbus::fdo::Error::Failed(format!("Could not remember settings permission: {e}")))?;
+                }
                 tracing::info!(caller = %caller, action, "yetki verildi");
                 Ok(())
             }
@@ -103,6 +148,25 @@ impl Helper {
                 Err(zbus::fdo::Error::AccessDenied(format!("{e}")))
             }
         }
+    }
+}
+
+fn settings_grant_exists(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.uid() == 0 && m.mode() & 0o022 == 0)
+}
+
+fn remember_settings_grant(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    // Directory is accessible only by root, and existing untrusted entries
+    // are rejected rather than followed or overwritten.
+    match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path) {
+        Ok(file) => file.sync_all(),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && settings_grant_exists(path) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -137,6 +201,75 @@ async fn container_pid() -> Option<u32> {
 
 #[interface(name = "id.liwinux.Helper1")]
 impl Helper {
+    async fn set_root_enabled(&self,enabled:bool, #[zbus(header)] hdr:Header<'_>)->zbus::fdo::Result<()> {
+        self.authorize(&hdr,"id.liwinux.helper.resources",true).await?;
+        root::stage(enabled).map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn prepare_root(&self, #[zbus(header)] hdr:Header<'_>)->zbus::fdo::Result<()> {
+        self.authorize(&hdr,ACT_PROP,false).await?;
+        // Applies only root-owned intent already authorized by SetRootEnabled.
+        root::prepare().await.map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn advanced_settings(&self, #[zbus(header)] hdr: Header<'_>)->zbus::fdo::Result<String> {
+        self.authorize(&hdr,ACT_PROP,false).await?;
+        advanced::read().await.map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn set_advanced_settings(&self,adb:bool,touches:bool,pointer:bool, #[zbus(header)] hdr: Header<'_>)->zbus::fdo::Result<String> {
+        self.authorize(&hdr,"id.liwinux.helper.resources",true).await?;
+        advanced::set(advanced::Settings {adb,show_touches:touches,pointer_location:pointer}).await.map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn restore_advanced_settings(&self, #[zbus(header)] hdr: Header<'_>)->zbus::fdo::Result<()> {
+        if !std::path::Path::new("/var/lib/nexdroid/advanced.json").exists() {return Ok(());}
+        self.authorize(&hdr,"id.liwinux.helper.resources",true).await?;
+        advanced::restore().await.map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn phone_profile(&self, #[zbus(header)] hdr: Header<'_>) -> zbus::fdo::Result<String> {
+        self.authorize(&hdr,ACT_PROP,false).await?;
+        phone::selected().map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn set_phone_profile(&self, id:&str, #[zbus(header)] hdr: Header<'_>) -> zbus::fdo::Result<()> {
+        if !liw_core::phone::valid(id) {return Err(zbus::fdo::Error::InvalidArgs("Unknown phone profile".into()));}
+        self.authorize(&hdr,"id.liwinux.helper.resources",true).await?;
+        phone::select(id).map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn set_camera(&self, selection: &str, #[zbus(header)] hdr: Header<'_>) -> zbus::fdo::Result<()> {
+        if !liw_core::devices::valid_camera_id(selection) { return Err(zbus::fdo::Error::InvalidArgs("Invalid camera identifier".into())); }
+        self.authorize(&hdr,"id.liwinux.helper.resources",true).await?;
+        camera::select(selection).map_err(|e|zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn graphics_info(&self, #[zbus(header)] hdr: Header<'_>) -> zbus::fdo::Result<String> {
+        self.authorize(&hdr, ACT_PERF, false).await?;
+        let dump = run_dumpsys(&["dumpsys", "SurfaceFlinger"]).await?;
+        let egl = shell_getprop("ro.hardware.egl").await?;
+        let vulkan = shell_getprop("ro.hardware.vulkan").await?;
+        serde_json::to_string(&liw_core::graphics::AndroidGraphics::from_dump(&dump,egl,vulkan))
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+    async fn set_refresh_rate(&self, fps: u32, #[zbus(header)] hdr: Header<'_>) -> zbus::fdo::Result<()> {
+        if !(24..=360).contains(&fps) {
+            return Err(zbus::fdo::Error::InvalidArgs("Refresh rate must be 24–360 Hz".into()));
+        }
+        self.authorize(&hdr, "id.liwinux.helper.resources", true).await?;
+        run_dumpsys(&["setprop", "persist.waydroid.refresh_rate", &fps.to_string()]).await?;
+        Ok(())
+    }
+    async fn set_display_density(&self, dpi: u32, #[zbus(header)] hdr: Header<'_>) -> zbus::fdo::Result<()> {
+        if dpi != 0 && !(120..=640).contains(&dpi) {
+            return Err(zbus::fdo::Error::InvalidArgs("DPI must be Auto or 120–640".into()));
+        }
+        self.authorize(&hdr, "id.liwinux.helper.resources", true).await?;
+        // The embedded wl_output supplies the selected physical resolution.
+        // Clear legacy logical overrides once, before the game is launched.
+        run_dumpsys(&["wm", "size", "reset"]).await?;
+        let density = if dpi == 0 { "reset".to_owned() } else { dpi.to_string() };
+        run_dumpsys(&["wm", "density", &density]).await?;
+        Ok(())
+    }
+    async fn set_resources(&self, cpus: u32, memory_mib: u32,
+        #[zbus(header)] hdr: Header<'_>,
+    ) -> zbus::fdo::Result<()> {
+        self.apply_resources(cpus, memory_mib, hdr).await
+    }
     /// Opens Waydroid's touch pipe and hands over the WRITE handle.
     ///
     /// The handle is returned for speed: the keymapper writes ~200 frames per

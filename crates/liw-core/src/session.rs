@@ -151,6 +151,7 @@ impl Default for SupervisorConfig {
 }
 
 pub struct Supervisor {
+    lifecycle: tokio::sync::Mutex<DisplayOwner>,
     start_generation: std::sync::atomic::AtomicU64,
     wd: Waydroid,
     cfg: SupervisorConfig,
@@ -169,7 +170,7 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn new(cfg: SupervisorConfig) -> Self {
-        Self { start_generation: std::sync::atomic::AtomicU64::new(0),wd: Waydroid::new(), cfg, helper: None,
+        Self { lifecycle:Default::default(),start_generation: std::sync::atomic::AtomicU64::new(0),wd: Waydroid::new(), cfg, helper: None,
                embedded_display: Default::default() }
     }
 
@@ -219,13 +220,23 @@ impl Supervisor {
     /// `setsid` makes it a new session leader and stdio is closed, so the
     /// session survives the calling shell dying (Ctrl+C, closing the window).
     pub async fn start_detached(&self) -> Result<(), WaydroidError> {
-        let st = self.wd.status().await.unwrap_or_default();
+        let _guard=self.lifecycle.lock().await;
+        self.start_inner().await
+    }
+    async fn start_inner(&self) -> Result<(), WaydroidError> {
+        let st = self.wd.status().await?;
         if st.session_running() {
             tracing::info!("session already running");
             return Ok(());
         }
         crate::nvidia::preflight().map_err(WaydroidError::DriverCompatibility)?;
+        if let Some(helper)=&self.helper {
+            helper.prepare_root().await.map_err(|e|WaydroidError::Lifecycle(format!("Could not prepare Android root settings: {e}")))?;
+        }
         let socket = self.display_to_use();
+        if self.embedded_display.lock().map(|d|d.is_some()).unwrap_or(true) && socket.is_none() {
+            return Err(WaydroidError::Lifecycle("The embedded display disappeared; refusing to start Android on another compositor".into()));
+        }
         tracing::info!(?socket, "starting session (detached)");
         let mut cmd = Command::new("setsid");
         cmd.args(["--fork", "waydroid", "session", "start"]);
@@ -235,14 +246,58 @@ impl Supervisor {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        cmd.spawn()?.wait().await?;
         self.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        let status=cmd.spawn()?.wait().await?;
+        if !status.success() {return Err(WaydroidError::Lifecycle(format!("Detached Android launcher failed: {status}")));}
+        // `setsid --fork` exits before Waydroid registers its session bus name.
+        // Keep the lifecycle lock until the session is observable, otherwise
+        // an immediate attach could stop nothing and inherit this late start.
+        for _ in 0..120 {
+            if self.wd.status().await?.session_running() {return Ok(());}
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        Err(WaydroidError::Lifecycle("Android did not register its session after launch".into()))
     }
 
     pub async fn stop(&self) -> Result<(), WaydroidError> {
+        let _guard=self.lifecycle.lock().await;
+        self.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+        self.stop_inner().await
+    }
+    async fn stop_inner(&self) -> Result<(), WaydroidError> {
         tracing::info!("stopping the session");
-        self.wd.session_stop().await
+        self.wd.session_stop().await?;
+        for _ in 0..80 {
+            if stopped_for_handoff(&self.wd.status().await?) {return Ok(());}
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        Err(WaydroidError::Lifecycle("The previous Android session did not stop; refusing to attach a second session".into()))
+    }
+    /// One serialized handoff. Never trust the health loop's cached state here.
+    pub async fn attach_display(&self,name:&str,owner:&str) -> Result<(),WaydroidError> {
+        if !valid_display_owner(name,owner) {return Err(WaydroidError::Lifecycle("Invalid embedded display or owner".into()));}
+        let mut lease=self.lifecycle.lock().await;
+        let dir=std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(||WaydroidError::Lifecycle("XDG_RUNTIME_DIR is unavailable".into()))?;
+        use std::os::unix::fs::FileTypeExt;
+        if !std::fs::metadata(std::path::Path::new(&dir).join(name)).is_ok_and(|m|m.file_type().is_socket()) {
+            return Err(WaydroidError::Lifecycle("The embedded compositor socket is unavailable".into()));
+        }
+        self.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+        self.stop_inner().await?;
+        self.set_embedded_display(Some(name.into()));
+        lease.0=Some(owner.into());
+        if let Err(e)=self.start_inner().await {
+            lease.0=None;self.set_embedded_display(None);return Err(e);
+        }
+        tracing::info!(display=name,owner,"Android attached to embedded window");
+        Ok(())
+    }
+    pub async fn detach_display(&self,owner:&str) -> Result<(),WaydroidError> {
+        let mut lease=self.lifecycle.lock().await;
+        if !lease.release(owner) {return Ok(());}
+        self.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+        self.set_embedded_display(None);
+        self.stop_inner().await
     }
 
     /// Is the composer HAL process alive?
@@ -335,15 +390,74 @@ impl Supervisor {
     /// Partial recovery does not work: once composer dies Android cannot
     /// recover from the inside; the session must be rebuilt completely.
     pub async fn recover(&self) -> Result<(), WaydroidError> {
-        tracing::warn!("recovering session (full restart)");
-        let _ = self.wd.session_stop().await;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        self.start_detached().await
+        let _guard=self.lifecycle.lock().await;
+        self.recover_inner().await
     }
+    pub async fn recover_if_generation(&self,expected:u64) -> Result<(),WaydroidError> {
+        let _guard=self.lifecycle.lock().await;
+        if self.start_generation()!=expected {
+            tracing::info!("skipping recovery based on health from a previous Android session");return Ok(());
+        }
+        self.recover_inner().await
+    }
+    async fn recover_inner(&self) -> Result<(),WaydroidError> {
+        tracing::warn!("recovering session (full restart)");
+        self.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+        self.stop_inner().await?;
+        self.start_inner().await
+    }
+}
+
+#[derive(Default)]
+struct DisplayOwner(Option<String>);
+impl DisplayOwner {
+    fn release(&mut self,owner:&str)->bool {
+        if self.0.as_deref()!=Some(owner) {return false;}
+        self.0=None;true
+    }
+}
+fn valid_display_owner(name:&str,owner:&str)->bool {
+    name.starts_with("wayland-") && name.len()<=100 && name.bytes().all(|b|b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        && !owner.is_empty() && owner.len()<=100 && owner.bytes().all(|b|b.is_ascii_alphanumeric() || b"-_".contains(&b))
+}
+fn stopped_for_handoff(status:&Status)->bool {
+    status.session.eq_ignore_ascii_case("STOPPED")
+        && (status.container.is_empty() || status.container.eq_ignore_ascii_case("STOPPED"))
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn handoff_waits_for_the_container_not_just_the_session() {
+        let mut status=crate::waydroid::Status {session:"STOPPED".into(),container:"RUNNING".into(),..Default::default()};
+        assert!(!super::stopped_for_handoff(&status));
+        status.container="FROZEN".into();assert!(!super::stopped_for_handoff(&status));
+        status.container="STOPPED".into();assert!(super::stopped_for_handoff(&status));
+        status.session="RUNNING".into();assert!(!super::stopped_for_handoff(&status));
+        assert!(!super::stopped_for_handoff(&Default::default()));
+    }
+    #[tokio::test]
+    async fn lifecycle_commands_wait_and_stale_recovery_does_not_run_waydroid() {
+        let sup=super::Supervisor::new(Default::default());
+        sup.start_generation.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+        let guard=sup.lifecycle.lock().await;
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20),sup.recover_if_generation(0)).await.is_err());
+        drop(guard);
+        sup.recover_if_generation(0).await.unwrap();
+        assert_eq!(sup.start_generation(),1);
+    }
+    #[test]
+    fn closing_an_old_window_cannot_detach_its_replacement() {
+        let mut lease=super::DisplayOwner(Some("new-window".into()));
+        assert!(!lease.release("old-window"));assert_eq!(lease.0.as_deref(),Some("new-window"));
+        assert!(lease.release("new-window"));assert!(!lease.release("new-window"));
+    }
+    #[test]
+    fn display_names_cannot_escape_the_runtime_directory() {
+        assert!(super::valid_display_owner("wayland-liw","123-456"));
+        assert!(!super::valid_display_owner("wayland-../../other","123"));
+        assert!(!super::valid_display_owner("wayland-liw",""));
+    }
     #[test]
     fn startup_is_not_recovered_after_three_five_second_polls() {
         let mut grace=super::BootGrace::default();

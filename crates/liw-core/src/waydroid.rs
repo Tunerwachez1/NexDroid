@@ -14,6 +14,8 @@ pub enum WaydroidError {
     NotInstalled,
     #[error("{0}")]
     DriverCompatibility(String),
+    #[error("{0}")]
+    Lifecycle(String),
 }
 
 /// Parsed form of `waydroid status` output.

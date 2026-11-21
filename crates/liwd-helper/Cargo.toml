@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+roxmltree = "0.21.1"
+tempfile = "3.27.0"
 anyhow = "1.0.104"
 libc = "0.2.189"
 liw-core = { version = "0.1.0", path = "../liw-core" }

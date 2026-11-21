@@ -17,7 +17,10 @@ NoNewPrivileges=yes
 ProtectHome=read-only
 ProtectKernelTunables=no
 ProtectKernelModules=yes
-ProtectControlGroups=yes
+# SetResources writes only to the verified Waydroid LXC payload after polkit.
+# The payload may be created after this helper starts, so a static writable
+# bind mount of that directory cannot cover container restarts.
+ProtectControlGroups=no
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 MemoryDenyWriteExecute=yes

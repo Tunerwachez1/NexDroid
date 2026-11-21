@@ -32,6 +32,8 @@ pub enum ManagerError {
     default_path = "/id/liwinux/Manager1"
 )]
 pub trait Manager1 {
+    fn attach_embedded_display(&self, name:&str, owner:&str) -> zbus::Result<()>;
+    fn detach_embedded_display(&self, owner:&str) -> zbus::Result<()>;
     fn start(&self) -> zbus::Result<()>;
     fn set_embedded_display(&self, name: &str) -> zbus::Result<()>;
     fn set_active_window(&self, class: &str) -> zbus::Result<()>;
@@ -287,6 +289,16 @@ impl Manager {
 
     pub async fn session_start(&self) -> Result<(), ManagerError> {
         self.proxy.start().await.map_err(|e| ManagerError::Call(friendly(&e)))
+    }
+    pub async fn live_status(&self)->Result<crate::waydroid::Status,ManagerError> {
+        let raw=self.proxy.status().await.map_err(|e|ManagerError::Call(friendly(&e)))?;
+        Ok(serde_json::from_str(&raw)?)
+    }
+    pub async fn attach_embedded_display(&self,name:&str,owner:&str)->Result<(),ManagerError> {
+        self.proxy.attach_embedded_display(name,owner).await.map_err(|e|ManagerError::Call(friendly(&e)))
+    }
+    pub async fn detach_embedded_display(&self,owner:&str)->Result<(),ManagerError> {
+        self.proxy.detach_embedded_display(owner).await.map_err(|e|ManagerError::Call(friendly(&e)))
     }
     pub async fn session_stop(&self) -> Result<(), ManagerError> {
         self.proxy.stop().await.map_err(|e| ManagerError::Call(friendly(&e)))

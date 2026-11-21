@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+on init
+    export PATH /debug_ramdisk:/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin
+on post-fs-data
+    exec -- /system/bin/sh /system/etc/nexdroid-root/bootstrap.sh
+on nonencrypted
+    exec -- /debug_ramdisk/magisk --service
+on property:vold.decrypt=trigger_restart_framework
+    exec -- /debug_ramdisk/magisk --service
+on property:sys.boot_completed=1
+    exec -- /debug_ramdisk/magisk --boot-complete
+on property:init.svc.zygote=restarting
+    exec -- /debug_ramdisk/magisk --zygote-restart
+on property:init.svc.zygote=stopped
+    exec -- /debug_ramdisk/magisk --zygote-restart
