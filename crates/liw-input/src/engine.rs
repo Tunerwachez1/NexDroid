@@ -953,7 +953,7 @@ mod tests {
         b.insert("zipla".into(), Binding::Tap {
             trigger: Trigger::Key(SPACE), at: Norm::new(0.9, 0.8),
         });
-        Profile { name: "t".into(), package: "p".into(), bindings: b }
+        Profile { auto_text: true, name: "t".into(), package: "p".into(), bindings: b }
     }
 
     fn aim_profile() -> Profile {
@@ -968,7 +968,7 @@ mod tests {
             // These tests exercise the BOUNDED path.
             unbounded: false, safety_span: 32.0,
         });
-        Profile { name: "t".into(), package: "p".into(), bindings: b }
+        Profile { auto_text: true, name: "t".into(), package: "p".into(), bindings: b }
     }
 
     fn key(k: u16) -> TriggerKind { TriggerKind::Key(k) }
@@ -1147,7 +1147,7 @@ mod tests {
             handoff, nonlinear: false, reset_delay_ms: 0,
             unbounded: false, safety_span: 32.0,
         });
-        Engine::new(Profile { name: "t".into(), package: "p".into(), bindings: b })
+        Engine::new(Profile { auto_text: true, name: "t".into(), package: "p".into(), bindings: b })
     }
     fn always_on_aim() -> Engine { aim_engine(false) }
 
@@ -1379,7 +1379,7 @@ mod tests {
             from: Norm::new(0.5, 0.5), to: Norm::new(0.2, 0.5), duration_ms: 80,
             group: None, easing: Easing::Linear,
         });
-        Engine::new(Profile { name: "t".into(), package: "p".into(), bindings: b })
+        Engine::new(Profile { auto_text: true, name: "t".into(), package: "p".into(), bindings: b })
     }
 
     /// Two swipes in one group: the second must CANCEL the first.
@@ -1402,7 +1402,7 @@ mod tests {
             from: Norm::new(0.9, 0.8), to: Norm::new(0.9, 0.7), duration_ms: 80,
             group: None, easing: Easing::Linear,
         });
-        Engine::new(Profile { name: "t".into(), package: "p".into(), bindings: b })
+        Engine::new(Profile { auto_text: true, name: "t".into(), package: "p".into(), bindings: b })
     }
 
     #[test]
@@ -1531,7 +1531,7 @@ mod tests {
             from: Norm::new(0.5, 0.5), to: Norm::new(0.2, 0.5), duration_ms: 80,
             group: None, easing: Easing::EaseOutStrong,
         });
-        let mut e = Engine::new(Profile { name: "t".into(), package: "p".into(), bindings: b });
+        let mut e = Engine::new(Profile { auto_text: true, name: "t".into(), package: "p".into(), bindings: b });
         let _ = e.handle(InputEvent::Press(key(A)));
 
         let mut moves: Vec<Norm> = Vec::new();
@@ -1612,7 +1612,7 @@ mod tests {
             handoff: false, nonlinear: true, reset_delay_ms: 12,
             unbounded: true, safety_span: 32.0,
         });
-        let mut e = Engine::new(Profile {
+        let mut e = Engine::new(Profile { auto_text: true,
             name: "t".into(), package: "p".into(), bindings: b });
         e.set_offscreen_ok(true);
         e
@@ -1770,7 +1770,7 @@ mod tests {
             left: Trigger::Key(A), right: Trigger::Key(D),
             center: Norm::new(0.2, 0.7), radius: 0.1,
         });
-        let mut e = Engine::new(Profile {
+        let mut e = Engine::new(Profile { auto_text: true,
             name: "t".into(), package: "p".into(), bindings: b });
 
         let _ = mouse(&mut e, 10.0, 0.0);
@@ -1831,7 +1831,7 @@ mod must_use_guard {
         b.insert("t".into(), Binding::Tap {
             trigger: Trigger::Key(57), at: Norm::new(0.5, 0.5),
         });
-        let mut e = Engine::new(Profile {
+        let mut e = Engine::new(Profile { auto_text: true,
             name: "t".into(), package: "p".into(), bindings: b,
         });
         let down = e.handle(InputEvent::Press(TriggerKind::Key(57)));

@@ -210,12 +210,17 @@ fn default_safety_span() -> f32 { 32.0 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
+    /// Suspend bindings while Android reports an active text editor.
+    #[serde(default = "default_auto_text")]
+    pub auto_text: bool,
     pub name: String,
     /// Android package name, so the profile can be applied automatically.
     pub package: String,
     /// Binding name -> behaviour. The name is the key for pointer allocation.
     pub bindings: std::collections::BTreeMap<String, Binding>,
 }
+
+fn default_auto_text() -> bool { true }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
@@ -311,6 +316,18 @@ duration_ms = 80
         let p = Profile::from_toml(SAMPLE).unwrap();
         assert_eq!(p.package, "com.kiloo.subwaysurf");
         assert_eq!(p.bindings.len(), 2);
+    }
+
+    #[test]
+    fn auto_text_defaults_on_and_disabled_setting_roundtrips() {
+        let mut p = Profile::from_toml(SAMPLE).unwrap();
+        assert!(p.auto_text);
+        p.auto_text = false;
+        let text = serde_json::to_string(&p).unwrap();
+        let decoded: Profile = serde_json::from_str(&text).unwrap();
+        assert!(!decoded.auto_text);
+        let toml = crate::store::render(None, &p).unwrap();
+        assert!(!Profile::from_toml(&toml).unwrap().auto_text);
     }
 
     #[test]

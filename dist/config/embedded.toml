@@ -1,0 +1,3 @@
+# Native embedded window owns keyboard routing; no global evdev grab at login.
+fullscreen_on_start = false
+keymapper_on_start = false

@@ -195,7 +195,7 @@ async fn window_geometry() -> Result<(i32, i32, u32, u32)> {
 /// diverging writer for the same files is how comments quietly disappear.
 fn write_back(path: &Path, bindings: &BTreeMap<String, Binding>,
               name: &str, package: &str) -> Result<()> {
-    let p = liw_core::input::Profile {
+    let p = liw_core::input::Profile { auto_text: true,
         name: name.into(), package: package.into(), bindings: bindings.clone(),
     };
     if path.extension().is_some_and(|extension| extension == "json") {

@@ -3354,6 +3354,7 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "image",
+ "libc",
  "liw-compositor",
  "liw-core",
  "liw-input",

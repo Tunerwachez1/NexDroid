@@ -32,6 +32,7 @@ mod theme;
 mod instance;
 mod pointer_lock;
 mod keyboard;
+mod editor_focus;
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 

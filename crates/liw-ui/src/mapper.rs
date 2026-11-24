@@ -91,7 +91,7 @@ impl Mapper {
         let store = liw_input::store::Store::discover();
         self.profile = Some(match store.for_package(package) {
             Some(entry) => entry.profile.clone(),
-            None => Profile {
+            None => Profile { auto_text: true,
                 name: name.to_string(),
                 package: package.to_string(),
                 bindings: Default::default(),
@@ -469,7 +469,7 @@ mod tests {
     fn editing() -> Mapper {
         let mut m = Mapper::default();
         m.on = true;
-        m.profile = Some(Profile {
+        m.profile = Some(Profile { auto_text: true,
             name: "t".into(),
             package: "com.x".into(),
             bindings: Default::default(),

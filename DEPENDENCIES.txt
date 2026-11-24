@@ -6,7 +6,7 @@ Package names differ on other distributions.
 
 Required before building
 ------------------------
-- A working Waydroid installation and Android image
+- Waydroid and Android (installed automatically by scripts/install-nexdroid.sh on Arch/CachyOS x86_64; otherwise follow official distro instructions)
 - Rust stable with Cargo, edition 2024 support
 - Git
 - C/C++ build toolchain: base-devel, clang, cmake, pkgconf

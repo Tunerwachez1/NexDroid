@@ -65,6 +65,11 @@ pub struct GameView {
     keyboard: Option<Keyboard>,
     held_keys: BTreeMap<u16, KeyRoute>,
     text_input: bool,
+    editor_focus: Option<crate::editor_focus::Monitor>,
+    editor_event: Option<crate::editor_focus::Event>,
+    text_override: Option<bool>,
+    auto_text: bool,
+    resume_capture: bool,
     capture_message: Option<String>,
     shown: (f32, f32),
     /// The game window takes key events for the editor: arrows nudge, other
@@ -121,6 +126,11 @@ impl GameView {
             }).ok(),
             held_keys: BTreeMap::new(),
             text_input: false,
+            editor_focus: crate::editor_focus::Monitor::start().map_err(|e| tracing::warn!(%e,"IME focus bridge unavailable; F8 remains available")).ok(),
+            editor_event: None,
+            text_override: None,
+            auto_text: true,
+            resume_capture: false,
             capture_message: None,
             shown: (0.0, 0.0),
             focus: cx.focus_handle(),
@@ -193,6 +203,7 @@ impl GameView {
         cx.observe_window_activation(window, |v, window, cx| {
             let active = window.is_window_active();
             if !active {
+                v.resume_capture = false;
                 v.release_mouse();
                 v.release_keys();
                 v.touch.release_all();
@@ -514,6 +525,7 @@ impl GameView {
                     v.frame_pump = None;
                     return false;
                 }
+                v.sync_editor_focus(window, cx);
                 v.poll_keyboard(window, cx);
                 v.poll_mouse(cx);
                 v.touch.tick();
@@ -568,6 +580,8 @@ impl GameView {
 
     fn update_foreground(&mut self, package: Option<String>, cx: &mut Context<Self>) {
         if self.foreground != package {
+            self.resume_capture = false;
+            self.text_override = None;
             self.release_mouse();
             self.release_keys();
             self.touch.release_all();
@@ -601,6 +615,7 @@ impl GameView {
         let profile = self.foreground.as_deref()
             .and_then(|package| store.for_package(package))
             .map(|entry| entry.profile.clone());
+        self.auto_text = profile.as_ref().map(|p|p.auto_text).unwrap_or(true);
         self.touch.load_profile(profile);
     }
 
@@ -747,6 +762,45 @@ impl GameView {
         self.release_keys();
         self.touch.release_all();
         self.text_input = !self.text_input;
+        self.text_override = Some(self.text_input);
+        self.resume_capture = false;
+        cx.notify();
+    }
+
+    fn sync_editor_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let event = self.editor_focus.as_ref().and_then(|m|m.snapshot());
+        if event != self.editor_event { self.text_override = None; self.editor_event = event.clone(); }
+        let wanted = crate::editor_focus::effective(event.as_ref(),self.foreground.as_deref().unwrap_or(&self.package),self.auto_text,self.text_override);
+        if wanted == self.text_input { return; }
+        if wanted {
+            self.resume_capture = self.pointer_lock.as_ref().is_some_and(PointerLock::requested);
+        }
+        self.release_mouse();
+        self.release_keys();
+        self.touch.release_all();
+        self.text_input = wanted;
+        if !wanted && std::mem::take(&mut self.resume_capture)
+            && window.is_window_active() && !self.settings_open && !self.mapper.is_on() {
+            self.toggle_mouse(window);
+        }
+        tracing::info!(active=wanted,"Android editor input mode changed");
+        cx.notify();
+    }
+
+    fn toggle_auto_text(&mut self,cx:&mut Context<Self>) {
+        let Some(package)=self.foreground.as_deref() else {return};
+        let store=Store::discover();
+        let Some(entry)=store.for_package(package) else {
+            self.capture_message=Some("Сначала сохраните управление для этой игры.".into());cx.notify();return;
+        };
+        let mut profile=entry.profile.clone();
+        profile.auto_text=!profile.auto_text;
+        match store.save(&profile) {
+            Ok(_)=>{self.auto_text=profile.auto_text;self.text_override=None;
+                if let Some(draft)=self.mapper.profile.as_mut().filter(|p|p.package==profile.package) {draft.auto_text=profile.auto_text;}
+            },
+            Err(e)=>self.capture_message=Some(e.to_string()),
+        }
         cx.notify();
     }
 
@@ -764,6 +818,7 @@ impl GameView {
                             self.route_key(code, pressed, window, cx);
                         }
                         KeyEvent::FocusLost => {
+                            self.resume_capture = false;
                             self.release_mouse();
                             self.release_keys();
                             self.held_keys.clear();
@@ -799,6 +854,7 @@ impl GameView {
         self.shortcuts.label(action,self.touch.aim_key).map(|s|format!(" · {s}")).unwrap_or_default()
     }
     fn route_key_with_modifiers(&mut self, code:u16,pressed:bool,event_modifiers:Option<u8>,window:&mut Window,cx:&mut Context<Self>) {
+        self.sync_editor_focus(window,cx);
         if self.settings_open { return; }
         let trigger = Trigger::Key(code);
         if !pressed {
@@ -1342,6 +1398,7 @@ fn idle(v: &GameView, t: &Theme, cx: &mut Context<GameView>) -> gpui::AnyElement
         .child(head(t, "Управление"))
         .when_some(v.foreground.as_deref(), |el, package| el.child(note(t, package)))
         .child(action(t, "text-input", &format!("{}{}",if v.text_input {"Вернуться к управлению"} else {"Ввод текста"},v.shortcut_hint(crate::shortcuts::Action::TextInput)), cx, |v, cx| v.toggle_text_input(cx)))
+        .child(action(t,"auto-text",if v.auto_text {"Автоввод текста: включён"} else {"Автоввод текста: выключен"},cx,|v,cx|v.toggle_auto_text(cx)))
         .when_some(v.touch.aim_key, |el, key| {
             el.child(row(t, "Захват мыши", &v.shortcuts.label(crate::shortcuts::Action::CaptureMouse,Some(key)).unwrap_or_else(||"Отключено".into())))
         })

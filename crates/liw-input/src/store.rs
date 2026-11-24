@@ -368,6 +368,7 @@ pub fn render(existing: Option<&str>, p: &Profile) -> Result<String, ProfileErro
     };
     set_str(&mut doc, "name", &p.name);
     set_str(&mut doc, "package", &p.package);
+    doc["auto_text"] = toml_edit::value(p.auto_text);
 
     if doc.get("bindings").is_none() {
         let mut t = toml_edit::Table::new();
@@ -523,7 +524,7 @@ mod write_tests {
         let mut b = BTreeMap::new();
         b.insert("jump".into(), Binding::Tap {
             trigger: Trigger::Key(57), at: Norm::new(0.9, 0.8) });
-        Profile { name: "T".into(), package: "com.x".into(), bindings: b }
+        Profile { auto_text: true, name: "T".into(), package: "com.x".into(), bindings: b }
     }
 
     #[test]
@@ -567,7 +568,7 @@ mod write_tests {
             up: Trigger::Key(17), down: Trigger::Key(31),
             left: Trigger::Key(30), right: Trigger::Key(32),
             center: Norm::new(0.148, 0.738), radius: 0.085 });
-        let p = Profile { name: "T".into(), package: "com.x".into(), bindings: b };
+        let p = Profile { auto_text: true, name: "T".into(), package: "com.x".into(), bindings: b };
         let out = render(None, &p).unwrap();
         assert!(out.contains("0.148"), "{out}");
         assert!(!out.contains("0.1480000"), "float noise:\n{out}");
