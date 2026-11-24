@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#status"><img alt="status" src="https://img.shields.io/badge/status-public%20beta-f08a3c?style=flat-square"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-458%20passing-4fd1c5?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/tests-488%20passing-4fd1c5?style=flat-square">
   <img alt="rust" src="https://img.shields.io/badge/rust-edition%202024-c8cfe4?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-9aa4c0?style=flat-square">
 </p>
@@ -35,6 +35,9 @@ as an official Liwinux release.
 
 ### Changes in the NexDroid beta
 
+- [automatic text input](docs/automatic-text-input.md): Android editor focus suspends game bindings; F8 remains a manual override;
+- [unified beta installer](docs/unified-install.md) for Arch/CachyOS x86_64: automatically installs Waydroid, downloads a fresh GAPPS Android and installs the included Android Desktop/HardwareIme APK;
+
 - embedded Android window with a native Rust sidebar and real F11 fullscreen;
 - Russian control editor with selectable and movable touch controls;
 - per-game JSON mappings named `cont_<android.package>.json`;
@@ -50,9 +53,16 @@ as an official Liwinux release.
 - Russian and English settings UI with custom JSON language imports;
 - managed Magisk root with per-app approval and verified enable/disable hooks;
 - authenticated network ADB, tap/pointer diagnostics and Pixel 6/7/8 profiles;
-- 458 automated Rust tests across the current workspace.
+- 488 automated Rust tests across the current workspace.
 
 ## What was fixed compared with Liwinux
+
+**New installation:** run `bash scripts/install-nexdroid.sh` from this checkout
+or the [release archive](https://github.com/Tunerwachez1/NexDroid/releases).
+The archive includes Rust binaries and the Android APK. No separate manual
+Waydroid download is needed. Existing data is retained. NVIDIA native backend
+and ARM translation provisioning remain separate beta limitations; read
+[installation details](docs/unified-install.md).
 
 Most of these fixes were developed before NexDroid's first public snapshot and
 were published together in the initial beta commit. The repeated link below is
@@ -75,6 +85,8 @@ history was created after the fact.
 | At 1920×1080 and high refresh rates such as 360 Hz, the picture could crop or stretch | The host framebuffer size was advertised as a new native Android output and the damage tracker used a 1:1 scale. | Native Android resolution is now independent from window size; frames are scaled locally with the correct damage scale and aspect ratio. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
 | Saving CPU and memory limits requested the administrator password every time | Each save was treated as a new privileged action without a narrow persistent grant for NexDroid settings. | Added a dedicated PolicyKit action for fixed Android settings and a root-owned per-UID remembered grant. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
 | Network ADB could remain stuck in `stopping` | Android init reported a transitional state while a hung `adbd` process remained without a usable TCP listener. | The helper checks the real port 5555 listener, waits for a clean stop, terminates only a stuck `adbd`, then starts and verifies it again. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
+| Opening game chat required manually toggling F8 every time | The host keymapper received no Android editor focus events. | HardwareIme now sends EditorInfo/InputConnection metadata to Rust; game bindings suspend/resume automatically, with F8 retained as a manual override. | [`87afe8e`](https://github.com/Tunerwachez1/NexDroid/commit/87afe8e) |
+| Standoff chat closure could not be detected reliably from the input-started flag | Android kept `mInputStarted=true` after the editor and InputConnection were gone. | TYPE_NULL and InputConnection are checked, transient editor finish/start transitions are coalesced, and held keys are released on mode changes. | [`87afe8e`](https://github.com/Tunerwachez1/NexDroid/commit/87afe8e) |
 
 ## Screenshots
 
@@ -326,7 +338,7 @@ to it: `scripts/poc/poc0-verify.sh` (GPU rendering), `poc1-arm.sh` (houdini),
 
 ## Status
 
-**Public beta.** The current branch builds and all 458 tests pass, but this is
+**Public beta.** The current branch builds and all 488 tests pass, but this is
 not a promise that every Waydroid image, GPU driver or desktop compositor works.
 The active development system is CachyOS/Arch, KWin on Wayland, an
 **NVIDIA GeForce RTX 3050 Laptop GPU**, and Waydroid Android 13 with Google
@@ -369,7 +381,7 @@ scripts/poc/         stack setup and verification: GPU, houdini, GAPPS, DNS
 scripts/kwin/        compositor scripts
 ```
 
-Tests are behavioural, not incidental: 458 of them, and most encode a bug that
+Tests are behavioural, not incidental: 488 of them, and most encode a bug that
 actually happened. `overlapping_snapshots_do_not_inflate_sample_count` exists
 because a measurement once reported 23560 intervals from 7997 frames.
 

@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#статус"><img alt="статус" src="https://img.shields.io/badge/статус-публичная%20beta-f08a3c?style=flat-square"></a>
-  <img alt="тесты" src="https://img.shields.io/badge/тесты-458%20проходят-4fd1c5?style=flat-square">
+  <img alt="тесты" src="https://img.shields.io/badge/тесты-488%20проходят-4fd1c5?style=flat-square">
   <img alt="rust" src="https://img.shields.io/badge/rust-edition%202024-c8cfe4?style=flat-square">
   <img alt="лицензия" src="https://img.shields.io/badge/лицензия-GPL--3.0--or--later-9aa4c0?style=flat-square">
 </p>
@@ -59,7 +59,7 @@ NexDroid — изменённый форк
   безопасным включением и отключением при перезапуске Android;
 - сетевой ADB с сохранённой авторизацией, показ касаний и координат указателя;
 - профили Google Pixel 6, Pixel 7 и Pixel 8 без удаления данных приложений;
-- 458 автоматизированных Rust-тестов.
+- 488 автоматизированных Rust-тестов.
 
 ## Что исправлено относительно Liwinux
 
@@ -84,6 +84,8 @@ NexDroid и было опубликовано одним начальным beta
 | При 1920×1080 и высокой частоте, например 360 Гц, изображение обрезалось или растягивалось | Размер framebuffer хоста ошибочно объявлялся Android как новый нативный output, а damage tracker считал масштаб 1:1. | Нативное разрешение Android отделено от размера окна; кадр масштабируется локально с правильным damage scale и сохранением пропорций. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
 | Настройки CPU и памяти каждый раз запрашивали пароль администратора | Каждое сохранение создавалось как новая привилегированная операция без узкого постоянного разрешения для NexDroid. | Добавлено отдельное PolicyKit-разрешение только для фиксированных Android-настроек и root-owned запись выданного разрешения текущему UID. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
 | Сетевой ADB мог навсегда остаться в состоянии `stopping` | Android init сообщал переходное состояние, но зависший `adbd` продолжал держать процесс без доступного TCP-порта. | Helper проверяет реальный LISTEN на 5555, ждёт штатную остановку и при зависании завершает только `adbd`, после чего запускает и проверяет его заново. | [`7619fdb`](https://github.com/Tunerwachez1/NexDroid/commit/7619fdb) |
+| Для каждого открытия игрового чата приходилось вручную нажимать F8 | Host keymapper не получал событий фокуса Android-редактора. | HardwareIme передаёт метаданные EditorInfo/InputConnection в Rust; игровые привязки автоматически приостанавливаются и восстанавливаются, F8 сохранён как ручной override. | [`87afe8e`](https://github.com/Tunerwachez1/NexDroid/commit/87afe8e) |
+| Закрытие чата Standoff нельзя было надёжно определить по флагу начала ввода | Android оставлял `mInputStarted=true` при уже пустом редакторе и отсутствующем InputConnection. | Проверяются TYPE_NULL и InputConnection; finish/start при смене полей объединяются, удерживаемые клавиши освобождаются при смене режима. | [`87afe8e`](https://github.com/Tunerwachez1/NexDroid/commit/87afe8e) |
 
 Внутренние имена `liw`, `liwd`, `liwinux` и `id.liwinux.*` пока сохранены
 для совместимости с профилями, службами и D-Bus API Liwinux.
@@ -99,6 +101,27 @@ NexDroid и было опубликовано одним начальным beta
 | ![Standoff 2 в окне NexDroid](assets/screenshots/game-window.png) | ![Standoff 2 в полноэкранном режиме](assets/screenshots/fullscreen-game.png) |
 
 ## Сборка и установка
+
+Для Arch/CachyOS x86_64 доступен [единый beta-установщик](docs/unified-install.md):
+
+```bash
+git clone https://github.com/Tunerwachez1/NexDroid.git
+cd NexDroid
+bash scripts/install-nexdroid.sh
+```
+
+Он сам устанавливает Waydroid, на новой установке загружает Android GAPPS с
+системными приложениями и устанавливает наш Desktop/Manager. Готовый APK и его
+исходники находятся в [`android/desktop`](android/desktop). [Release-архив](https://github.com/Tunerwachez1/NexDroid/releases)
+содержит и Rust-бинарники, поэтому их не нужно компилировать самостоятельно.
+Существующие данные Android сохраняются. NVIDIA native backend и ARM translation
+пока не устанавливаются автоматически; [ограничения beta](docs/unified-install.md) обязательны к учёту.
+
+Добавлен [автоматический ввод текста](docs/automatic-text-input.md): при открытии
+Android-поля игровые привязки приостанавливаются, при закрытии возвращаются.
+F8 остаётся ручным переключателем, автоопределение отключается для каждой игры.
+
+### Ручная сборка
 
 Требуется Linux с Wayland и уже работающая установка Waydroid. Основной
 проверенный композитор — KWin. Пакеты для Arch/CachyOS и GPU-примечания
@@ -156,7 +179,7 @@ liw-ui --game dev.waydroid.manager.home
 
 ## Статус
 
-NexDroid — **публичная beta**. Текущая ветка собирается, а 458 тестов
+NexDroid — **публичная beta**. Текущая ветка собирается, а 488 тестов
 проходят, но это не означает, что поддерживается каждый Android-образ,
 GPU-драйвер и Wayland-композитор. Лучше всего проверены CachyOS/Arch,
 KWin, **NVIDIA GeForce RTX 3050 Laptop GPU**, Android 13, Google Apps и
