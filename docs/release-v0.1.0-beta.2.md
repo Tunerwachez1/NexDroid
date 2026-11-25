@@ -15,6 +15,8 @@
 
 ### Исправлено
 
+- Управление мышью: привязка обзора кешируется вместо повторного поиска и копирования на каждом движении; движение камеры отправляется до последующих событий кнопок, при захвате палец камеры создаётся первым. Это оптимизация пути ввода, без обещания нулевой задержки и без реализации TCE.
+
 - Несовпадение private `/usr` и системного драйвера: host-библиотеки обнаруживаются до подстановки `/usr`, монтируются read-only и используются Android, Linux UI и композитором. Библиотеки NVIDIA машины сборки исключены из runtime.
 - Чёрный экран из-за выбора Intel/Mesa после перехода на glibc-shim: Rust учитывает все NVIDIA-бэкенды при выборе GPU. Exact-RM guard старого native-режима сохранён.
 - Разные Binder-контексты между службами и private runtime: устройства подготавливаются в host namespace и используются совместно.
@@ -43,6 +45,8 @@
 Download the standalone archive, extract it and open **NexDroid** as your desktop user. It includes custom Android 13 GAPPS, Desktop/Manager, HardwareIme, ARMv7/ARM64 translation, Rust binaries and a private Waydroid/Python/LXC runtime. No separate Android download, Waydroid install or source build is required. First-run system preparation uses PolicyKit. Personal Android data/accounts and APK signing keys are not included.
 
 Fresh NVIDIA installs use the host driver through glibc-shim rather than a precompiled exact-version RM profile. Both library ABIs are checked and hardware-gated; driver changes trigger preparation before container startup. The host driver is also used by the Rust UI/compositor. Fixed shared Binder setup, canonical release paths, payload verification outside the host mirror, configuration regeneration for existing image paths and graphics selection for all NVIDIA modes.
+
+Captured mouse input also caches the look binding and dispatches camera motion before subsequent button frames. This is an input-path optimization, not a zero-latency guarantee or TCE implementation.
 
 Validated: 194 core tests, 17 host-driver/payload regression tests, 12 Android GPU cases and Linux EGL/GLES pixel smoke. Live Android boot and rendering were measured on RTX 3050 Laptop / NVIDIA 620.73.04; the owner confirmed Android and Standoff 2. Other driver versions and machines remain unvalidated. No universal compatibility or game FPS claim is made.
 

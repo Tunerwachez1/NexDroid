@@ -17,6 +17,8 @@
 
 ---
 
+[Список изменений](CHANGELOG.md) · [v0.1.0-beta.2](https://github.com/Tunerwachez1/NexDroid/releases/tag/v0.1.0-beta.2)
+
 > [!WARNING]
 > **NexDroid находится на стадии beta-тестирования.** Программа меняет
 > пользовательские и системные службы Waydroid, проверена на

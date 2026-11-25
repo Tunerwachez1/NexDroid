@@ -17,6 +17,8 @@
 
 ---
 
+[Changelog](CHANGELOG.md) · [v0.1.0-beta.2](https://github.com/Tunerwachez1/NexDroid/releases/tag/v0.1.0-beta.2)
+
 > [!WARNING]
 > **NexDroid is beta software.** It changes host and Waydroid services, has
 > only been exercised on a limited set of machines, and is not yet distributed
