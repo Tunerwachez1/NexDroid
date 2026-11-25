@@ -71,6 +71,10 @@ def repair_keyboard(uid, android_uid):
 
 
 def configure_keyboard(uid):
+    key = "show_ime_with_hard_keyboard"
+    if android("/system/bin/settings", "--user", "0", "get", "secure", key) == "null":
+        android("/system/bin/settings", "--user", "0", "put", "secure", key, "0")
+
     row = android("/system/bin/cmd", "package", "list", "packages", "-U", "--user", "0", DESKTOP)
     match = re.fullmatch(r"package:dev\.waydroid\.manager\.home uid:([1-9][0-9]{4})", row)
     if match is None:
