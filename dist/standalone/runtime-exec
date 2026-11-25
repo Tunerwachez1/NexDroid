@@ -16,6 +16,14 @@ if [[ -f /var/lib/nexdroid/gpu/vulkan-nvidia.json ]]; then
     graphics+=(--setenv VK_DRIVER_FILES /var/lib/nexdroid/gpu/vulkan-nvidia.json)
 fi
 [[ -x "$root/usr/bin/bwrap" ]] || { echo 'NexDroid runtime is incomplete' >&2; exit 1; }
+xkb_data=()
+if [[ ! -r "$root/usr/share/xkeyboard-config-2/rules/evdev" && -r /usr/share/xkeyboard-config-2/rules/evdev ]]; then
+    xkb_data+=(--setenv XKB_CONFIG_ROOT "$root/host/usr/share/xkeyboard-config-2")
+fi
+if [[ ! -r "$root/usr/share/X11/locale/compose.dir" && -r /usr/share/X11/locale/compose.dir ]]; then
+    xkb_data+=(--setenv XLOCALEDIR "$root/host/usr/share/X11/locale")
+fi
+
 caps=()
 if [[ $EUID == 0 ]]; then
     # Preserve the service's existing capabilities, including systemd drops;
@@ -42,7 +50,7 @@ exec "$root/usr/lib/ld-linux-x86-64.so.2" --library-path "$root/usr/lib" \
     --ro-bind-try /usr/bin/nvidia-modprobe /usr/bin/nvidia-modprobe \
     --ro-bind-try /usr/share/fonts /usr/share/fonts \
     --ro-bind-try /usr/share/icons /usr/share/icons \
-    "${graphics[@]}" --setenv NEXDROID_PRIVATE_RUNTIME "$base" \
+    "${xkb_data[@]}" "${graphics[@]}" --setenv NEXDROID_PRIVATE_RUNTIME "$base" \
     --setenv NEXDROID_HOST_DRIVER_ROOT "$root/host" \
     --setenv NEXDROID_HOST_DRIVER_MANIFEST /var/lib/nexdroid/gpu/host-driver.json \
     --setenv PATH /usr/bin:/usr/sbin:/bin --setenv PYTHONNOUSERSITE 1 \

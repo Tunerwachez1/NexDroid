@@ -14,7 +14,7 @@ def shell(*args):
                        capture_output=True, text=True, timeout=20)
     return p.stdout.replace('\r', '').strip()
 
-def finish(uid):
+def finish(uid, keyboard_only=False):
     assert os.geteuid() == 0 and uid > 0
     for _ in range(180):
         try:
@@ -47,10 +47,12 @@ def finish(uid):
         os.fchmod(fd, 0o710)
     finally:
         os.close(fd)
+    if keyboard_only:
+        return
     shell('ime', 'enable', pkg + '/.HardwareIme')
     shell('ime', 'set', pkg + '/.HardwareIme')
     shell('settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '0')
     shell('cmd', 'package', 'set-home-activity', '--user', '0', pkg + '/.MainActivity')
 
 if __name__ == '__main__':
-    finish(int(sys.argv[1]))
+    finish(int(sys.argv[1]), keyboard_only=sys.argv[2:] == ["--keyboard-only"])

@@ -64,7 +64,14 @@ def read_keyboard_state(wm_path=None, caps_paths=None):
 
 def main():
     directory = Path.home() / '.local/share/waydroid/data/local/tmp/waydroid-hardware-keyboard'
-    info = directory.lstat()
+    import time
+    while True:
+        try:
+            info = directory.lstat()
+            break
+        except FileNotFoundError:
+            print("Waiting for Android keyboard directory", flush=True)
+            time.sleep(2)
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_gid < 10000 or info.st_mode & 7:
         raise SystemExit('Keyboard directory needs owner=host user, group=Android app UID, mode=0710')
     path = directory / 'state.sock'
