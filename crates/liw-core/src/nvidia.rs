@@ -43,6 +43,13 @@ pub fn preflight() -> Result<(), String> {
     validate_versions(&module,&manifest)
 }
 
+/// All NVIDIA Android backends need the same GPU for the host window/importer.
+/// This does not broaden the exact-version preflight of the source RM backend.
+pub fn graphics_requires_nvidia(cfg: &str) -> bool {
+    matches!(selected(cfg, "nvidia_driver_mode").as_deref(),
+        Some("nvidia-prolapse" | "glibc-shim" | "venus"))
+}
+
 pub fn source_native_selected(cfg: &str) -> bool {
     selected(cfg,"nvidia_driver_mode").as_deref() == Some("nvidia-prolapse")
         && selected(cfg,"nvidia_prolapse_install").as_deref() == Some("dev-root")
@@ -65,6 +72,20 @@ mod tests {
     fn missing_evidence_is_an_error() {
         assert!(validate_versions(MODULE,"{}").is_err());
         assert!(validate_versions("GCC version: 620.70.06",r#"{"kernel_module":"620.70.06"}"#).is_err());
+    }
+    #[test]
+    fn every_nvidia_backend_selects_nvidia_for_host_graphics() {
+        for mode in ["nvidia-prolapse", "glibc-shim", "venus"] {
+            assert!(graphics_requires_nvidia(&format!("[waydroid]\nnvidia_driver_mode={mode}")));
+        }
+        assert!(!graphics_requires_nvidia("[properties]\nnvidia_driver_mode=glibc-shim"));
+        assert!(!graphics_requires_nvidia("[waydroid]\narch=x86_64"));
+    }
+    #[test]
+    fn host_driver_mode_never_uses_exact_rm_preflight() {
+        let cfg = "[waydroid]\nnvidia_driver_mode=glibc-shim\nnvidia_prolapse_install=dev-root";
+        assert!(graphics_requires_nvidia(cfg));
+        assert!(!source_native_selected(cfg));
     }
     #[test]
     fn reads_only_waydroid_keys() {

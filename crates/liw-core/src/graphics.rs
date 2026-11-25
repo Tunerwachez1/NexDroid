@@ -114,22 +114,22 @@ impl GraphicsSettings {
     pub fn select<'a>(
         &self,
         devices: &'a [Gpu],
-        source_native: bool,
+        requires_nvidia: bool,
     ) -> Result<Option<&'a Gpu>, String> {
         let selected = match &self.gpu {
             Some(id) => Some(devices.iter().find(|d| &d.id == id).ok_or_else(|| {
                 format!("Selected GPU {id} is unavailable. Choose Auto in Graphics settings.")
             })?),
-            None if source_native => Some(
+            None if requires_nvidia => Some(
                 devices
                     .iter()
                     .find(|d| d.vendor == "0x10de")
-                    .ok_or("The installed source-native Android backend requires an NVIDIA GPU")?,
+                    .ok_or("The selected Android backend requires an NVIDIA GPU")?,
             ),
             None => None,
         };
-        if source_native && selected.is_some_and(|d| d.vendor != "0x10de") {
-            return Err("The installed source-native Android backend requires an NVIDIA GPU. Other Android backends retain their own GPU compatibility.".into());
+        if requires_nvidia && selected.is_some_and(|d| d.vendor != "0x10de") {
+            return Err("The selected Android backend requires an NVIDIA GPU. Other Android backends retain their own GPU compatibility.".into());
         }
         Ok(selected)
     }

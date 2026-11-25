@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#status"><img alt="status" src="https://img.shields.io/badge/status-public%20beta-f08a3c?style=flat-square"></a>
-  <img alt="tests" src="https://img.shields.io/badge/tests-488%20passing-4fd1c5?style=flat-square">
+  <img alt="tests" src="https://img.shields.io/badge/core%20tests-194%20passing-4fd1c5?style=flat-square">
   <img alt="rust" src="https://img.shields.io/badge/rust-edition%202024-c8cfe4?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-9aa4c0?style=flat-square">
 </p>
@@ -35,6 +35,14 @@ as an official Liwinux release.
 
 ### Changes in the NexDroid beta
 
+- [standalone bundle](docs/standalone.md): extract and open `NexDroid`; includes
+  private Waydroid/Python/LXC runtime and Android, with first-run PolicyKit setup.
+  Available in [beta.2](https://github.com/Tunerwachez1/NexDroid/releases/tag/v0.1.0-beta.2);
+  the older beta.1 archive does not contain this runtime. GPU/kernel
+  requirements and validation limits still apply. Fresh NVIDIA installs use
+  [the host driver through glibc-shim](docs/nvidia-host-driver.md), with automatic
+  hardware checks instead of a fixed 620.73.04 RM profile.
+
 - [automatic text input](docs/automatic-text-input.md): Android editor focus suspends game bindings; F8 remains a manual override;
 - [unified beta installer](docs/unified-install.md) for Arch/CachyOS x86_64: the new full bundle uses included custom Android images with Desktop/HardwareIme and ARMv7/ARM64 (not yet in published beta.1);
 
@@ -57,12 +65,11 @@ as an official Liwinux release.
 
 ## What was fixed compared with Liwinux
 
-**New installation:** run `bash scripts/install-nexdroid.sh` from the full bundle
-with `dist/android` images. The source checkout alone does not contain Android.
-Published [beta.1](https://github.com/Tunerwachez1/NexDroid/releases) predates the
-new image bundle. Existing data is retained. NVIDIA native backend provisioning
-remains a separate beta limitation; read
-[installation details](docs/unified-install.md).
+**New installation:** download [the beta.2 standalone bundle](https://github.com/Tunerwachez1/NexDroid/releases/tag/v0.1.0-beta.2),
+extract it and open `NexDroid`. Android 13, ARM translation and the private
+Waydroid runtime are included. The source checkout alone does not contain the
+images. Existing data is retained. Fresh NVIDIA installations use the host driver
+through glibc-shim; see [requirements and validation](docs/standalone.md).
 
 Most of these fixes were developed before NexDroid's first public snapshot and
 were published together in the initial beta commit. The repeated link below is

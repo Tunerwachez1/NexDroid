@@ -1,6 +1,10 @@
 /target
 /dist/android/
+/dist/standalone-build/
+/scripts/__pycache__/
 /dist/NexDroid-*.tar.zst
 /results/*.txt
 /tools/
 *.log
+
+/dist/releases/

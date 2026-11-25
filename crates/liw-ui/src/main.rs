@@ -45,10 +45,10 @@ fn prepare_graphics_environment() -> anyhow::Result<()> {
     // for repairing a selection after a GPU is removed or replaced.
     if std::env::args().any(|arg| arg == "--settings") { return Ok(()); }
     let cfg = std::fs::read_to_string("/var/lib/waydroid/waydroid.cfg").unwrap_or_default();
-    let source_native = liw_core::nvidia::source_native_selected(&cfg);
+    let requires_nvidia = liw_core::nvidia::graphics_requires_nvidia(&cfg);
     let devices = liw_core::graphics::discover();
     let settings = liw_core::graphics::GraphicsSettings::load().map_err(anyhow::Error::msg)?;
-    let Some(device) = settings.select(&devices, source_native).map_err(anyhow::Error::msg)? else { return Ok(()); };
+    let Some(device) = settings.select(&devices, requires_nvidia).map_err(anyhow::Error::msg)? else { return Ok(()); };
     let nvidia = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json";
     let mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
     let proprietary_nvidia = device.vendor == "0x10de" && device.driver == "nvidia";
@@ -62,7 +62,10 @@ fn prepare_graphics_environment() -> anyhow::Result<()> {
     let node = device.node.display().to_string();
     let requested = [("__EGL_VENDOR_LIBRARY_FILENAMES",vendors),("ZED_DEVICE_ID",id),("LIW_EGL_RENDER_NODE",node)];
     if requested.iter().all(|(k,v)|std::env::var(k).as_deref()==Ok(v.as_str())) { return Ok(()); }
-    let error = std::process::Command::new(std::env::current_exe()?)
+    // The standalone bundle must re-enter its ELF loader wrapper on older hosts.
+    let executable = std::env::var_os("NEXDROID_UI_RUNNER")
+        .map(std::path::PathBuf::from).unwrap_or(std::env::current_exe()?);
+    let error = std::process::Command::new(executable)
         .args(std::env::args_os().skip(1)).envs(requested).exec();
     Err(error.into())
 }

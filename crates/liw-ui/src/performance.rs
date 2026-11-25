@@ -789,7 +789,7 @@ impl Performance {
         if self.tab == "graphics" {
             let result = (|| -> anyhow::Result<()> {
                 let cfg = std::fs::read_to_string("/var/lib/waydroid/waydroid.cfg").unwrap_or_default();
-                self.graphics.select(&liw_core::graphics::discover(),liw_core::nvidia::source_native_selected(&cfg)).map_err(anyhow::Error::msg)?;
+                self.graphics.select(&liw_core::graphics::discover(),liw_core::nvidia::graphics_requires_nvidia(&cfg)).map_err(anyhow::Error::msg)?;
                 std::fs::create_dir_all(directory())?;
                 atomic_json(&liw_core::graphics::GraphicsSettings::path(),&self.graphics)
             })();

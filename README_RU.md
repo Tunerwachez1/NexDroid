@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="#статус"><img alt="статус" src="https://img.shields.io/badge/статус-публичная%20beta-f08a3c?style=flat-square"></a>
-  <img alt="тесты" src="https://img.shields.io/badge/тесты-488%20проходят-4fd1c5?style=flat-square">
+  <img alt="тесты" src="https://img.shields.io/badge/core%20tests-194%20passing-4fd1c5?style=flat-square">
   <img alt="rust" src="https://img.shields.io/badge/rust-edition%202024-c8cfe4?style=flat-square">
   <img alt="лицензия" src="https://img.shields.io/badge/лицензия-GPL--3.0--or--later-9aa4c0?style=flat-square">
 </p>
@@ -101,6 +101,16 @@ NexDroid и было опубликовано одним начальным beta
 | ![Standoff 2 в окне NexDroid](assets/screenshots/game-window.png) | ![Standoff 2 в полноэкранном режиме](assets/screenshots/fullscreen-game.png) |
 
 ## Сборка и установка
+
+**Новый [standalone-комплект](docs/standalone.md): распакуйте архив и откройте
+`NexDroid`.** Waydroid, Python/LXC, Android и ARM-библиотеки уже включены.
+Первую подготовку служб приложение выполняет само через PolicyKit; отдельно
+ставить Waydroid или запускать сборку Android не нужно. Сборка доступна в
+[beta.2](https://github.com/Tunerwachez1/NexDroid/releases/tag/v0.1.0-beta.2);
+прежний beta.1 этого runtime не содержит. Требования Linux/GPU и границы проверки описаны
+в ссылке выше. Новые NVIDIA-установки используют [системный драйвер через
+glibc-shim](docs/nvidia-host-driver.md), без фиксированного RM-профиля 620.73.04.
+Команды ниже относятся к прежнему установщику и исходникам.
 
 Для Arch/CachyOS x86_64 доступен [единый beta-установщик](docs/unified-install.md):
 

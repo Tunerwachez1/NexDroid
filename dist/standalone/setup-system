@@ -1,0 +1,112 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# One first-run authorization; no distro package manager, downloads or compilers.
+set -euo pipefail
+umask 022
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+unset LD_PRELOAD LD_LIBRARY_PATH PYTHONPATH PYTHONHOME
+src=$(cd -- "$(dirname -- "$0")" && pwd)
+[[ $EUID == 0 && ${PKEXEC_UID:-} =~ ^[0-9]+$ && $PKEXEC_UID -gt 0 ]] || { echo 'Use the NexDroid launcher and PolicyKit.' >&2; exit 1; }
+uid=$PKEXEC_UID
+id=$(cat "$src/payload-id")
+[[ $id =~ ^[a-f0-9]{64}$ ]] || exit 1
+[[ -d /run/systemd/system ]] || { echo 'systemd is required.' >&2; exit 1; }
+install -d -m755 /run/nexdroid
+exec 9>/run/nexdroid/bootstrap.lock
+flock -n 9 || { echo 'NexDroid first-run preparation is already in progress.' >&2; exit 1; }
+if [[ $(cat /opt/nexdroid/ready 2>/dev/null || true) == "$id" ]]; then exit 0; fi
+state=$("$src/runtime-exec" /usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>/dev/null || true)
+[[ $state != RUNNING ]] || { echo 'Android is running. Close its session before the first standalone migration.' >&2; exit 1; }
+fresh=true
+[[ ! -f /var/lib/waydroid/waydroid.cfg ]] || fresh=false
+[[ ! -f /var/lib/nexdroid/bootstrap/first-boot-pending ]] || { echo 'A previous first boot did not finish. See standalone.log; refusing to mark an incomplete Android ready.' >&2; exit 1; }
+if "$fresh"; then
+    "$src/host-python" "$src/host-nvidia.py" preflight --base "$src"
+fi
+install -d -m755 /opt/nexdroid/releases /run/nexdroid
+ready="/run/nexdroid/bootstrap-$uid.ready"
+if [[ -f $ready ]]; then unlink "$ready"; fi
+dest="/opt/nexdroid/releases/$id"
+if [[ ! -d $dest ]]; then
+    stage="/opt/nexdroid/releases/.stage-$id-$$"
+    mkdir "$stage"
+    cp -a --no-preserve=ownership --reflink=auto "$src/." "$stage/"
+    chown -R root:root "$stage"
+    chmod -R go-w "$stage"
+    "$stage/host-python" "$stage/verify-payload.py" "$stage"
+    mv "$stage" "$dest"
+else
+    "$dest/host-python" "$dest/verify-payload.py" "$dest"
+fi
+previous_link=$(readlink /opt/nexdroid/current 2>/dev/null || true)
+previous_ready=$(cat /opt/nexdroid/ready 2>/dev/null || true)
+ln -s "releases/$id" "/opt/nexdroid/.current-$$"
+mv -Tf "/opt/nexdroid/.current-$$" /opt/nexdroid/current
+base=/opt/nexdroid/current
+"$base/host-python" "$base/prepare-binder.py"
+if "$fresh"; then
+    install -d -m755 /var/lib/waydroid
+    [[ ! -e /var/lib/waydroid/images ]] || { echo 'Images exist without a configuration; refusing to replace them.' >&2; exit 1; }
+    install -d -m700 /var/lib/nexdroid/bootstrap
+    printf '%s\n' "$id" > /var/lib/nexdroid/bootstrap/first-boot-pending
+    ln -s "$base/images" /var/lib/waydroid/images
+    "$base/runtime-exec" /usr/bin/waydroid init -i "$base/images" -s GAPPS
+    "$base/host-python" "$base/host-nvidia.py" prepare
+fi
+# Back up exactly the host integration files that are replaced. No userdata export.
+backup="/var/lib/nexdroid/bootstrap/$(date +%Y%m%d-%H%M%S)-$$"
+install -d -m700 "$backup"
+paths=(/etc/systemd/system/waydroid-container.service /etc/systemd/system/waydroid-container.service.d/zzzz-nexdroid-runtime.conf /etc/systemd/system/liwd-helper.service /usr/share/dbus-1/system-services/id.waydro.Container.service /usr/share/dbus-1/system-services/id.liwinux.Helper1.service /etc/dbus-1/system.d/id.waydro.Container.conf /etc/dbus-1/system.d/id.liwinux.Helper1.conf /usr/share/polkit-1/actions/id.liwinux.policy)
+for i in "${!paths[@]}"; do
+    if [[ -e ${paths[$i]} || -L ${paths[$i]} ]]; then cp -aP "${paths[$i]}" "$backup/$i"; fi
+done
+container_was_active=false
+helper_was_active=false
+if systemctl is-active --quiet waydroid-container.service; then container_was_active=true; fi
+if systemctl is-active --quiet liwd-helper.service; then helper_was_active=true; fi
+rollback() {
+    rc=$?
+    trap - ERR
+    set +e
+    echo "NexDroid bootstrap failed; restoring host integration from $backup" >&2
+    systemctl stop waydroid-container.service liwd-helper.service
+    for i in "${!paths[@]}"; do
+        if [[ -e ${paths[$i]} || -L ${paths[$i]} ]]; then unlink "${paths[$i]}"; fi
+        if [[ -e $backup/$i || -L $backup/$i ]]; then cp -aP "$backup/$i" "${paths[$i]}"; fi
+    done
+    if [[ -n $previous_link ]]; then
+        ln -s "$previous_link" "/opt/nexdroid/.rollback-$$"
+        mv -Tf "/opt/nexdroid/.rollback-$$" /opt/nexdroid/current
+    fi
+    if [[ $previous_ready =~ ^[a-f0-9]{64}$ ]]; then
+        printf '%s\n' "$previous_ready" > /opt/nexdroid/ready
+    elif [[ -f /opt/nexdroid/ready ]]; then unlink /opt/nexdroid/ready; fi
+    systemctl daemon-reload
+    systemctl reload dbus
+    if "$helper_was_active"; then systemctl start liwd-helper.service; fi
+    if "$container_was_active"; then systemctl start waydroid-container.service; fi
+    exit "$rc"
+}
+trap rollback ERR
+systemctl stop waydroid-container.service liwd-helper.service 2>/dev/null || true
+install -Dm644 "$base/integration/nexdroid-container.service" /etc/systemd/system/waydroid-container.service
+install -Dm644 "$base/integration/runtime-override.conf" /etc/systemd/system/waydroid-container.service.d/zzzz-nexdroid-runtime.conf
+install -Dm644 "$base/integration/liwd-helper.service" /etc/systemd/system/liwd-helper.service
+install -Dm644 "$base/integration/container.dbus-service" /usr/share/dbus-1/system-services/id.waydro.Container.service
+install -Dm644 "$base/integration/helper.dbus-service" /usr/share/dbus-1/system-services/id.liwinux.Helper1.service
+install -Dm644 "$base/integration/container.dbus-policy" /etc/dbus-1/system.d/id.waydro.Container.conf
+install -Dm644 "$base/integration/helper.dbus-policy" /etc/dbus-1/system.d/id.liwinux.Helper1.conf
+install -Dm644 "$base/integration/id.liwinux.policy" /usr/share/polkit-1/actions/id.liwinux.policy
+systemctl daemon-reload
+systemctl reload dbus 2>/dev/null || systemctl reload dbus-broker 2>/dev/null || true
+systemctl start liwd-helper.service
+systemctl start waydroid-container.service
+if "$fresh"; then
+    printf '%s:boot\n' "$id" > "$ready"
+    "$base/runtime-exec" /usr/bin/python3 "$base/finish-android.py" "$uid"
+    unlink "$ready"
+    unlink /var/lib/nexdroid/bootstrap/first-boot-pending
+fi
+printf '%s\n' "$id" > /opt/nexdroid/ready
+trap - ERR
+echo 'NexDroid runtime is ready.'

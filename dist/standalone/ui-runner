@@ -1,0 +1,7 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+base=$(cd -- "$(dirname -- "$0")" && pwd)
+export NEXDROID_UI_RUNNER="$base/ui-runner"
+export PATH="$base/host-bin:$PATH"
+exec "$base/runtime-exec" "$base/bin/liw-ui" "$@"

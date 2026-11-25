@@ -1,0 +1,77 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+src=$(cd -- "$(dirname -- "$0")" && pwd)
+logdir="${XDG_STATE_HOME:-$HOME/.local/state}/nexdroid"
+mkdir -p "$logdir"
+exec 3>&2
+exec >>"$logdir/standalone.log" 2>&1
+error() {
+    echo "$*" >&3
+    "$src/runtime-exec" /usr/bin/zenity --error --title=NexDroid --text="$*" 2>/dev/null || true
+    exit 1
+}
+[[ $EUID != 0 ]] || error 'Открывайте NexDroid обычным пользователем, без sudo.'
+[[ -n ${WAYLAND_DISPLAY:-} && -n ${XDG_RUNTIME_DIR:-} ]] || error 'Для NexDroid нужен рабочий стол Wayland.'
+id=$(cat "$src/payload-id")
+[[ $id =~ ^[a-f0-9]{64}$ ]] || error 'Повреждён комплект NexDroid.'
+if [[ ${1:-} == --check ]]; then
+    "$src/host-python" "$src/verify-payload.py" "$src"
+    "$src/runtime-exec" /usr/bin/python3 -c 'import gi,dbus,gbinder'
+    "$src/runtime-exec" /usr/bin/waydroid --version
+    "$src/runtime-exec" /usr/bin/lxc-info --version
+    echo 'Комплект проверен. Системные службы и Android не изменялись.' >&3
+    exit
+fi
+prepared=false
+if [[ $(cat /opt/nexdroid/ready 2>/dev/null || true) != "$id" ]]; then
+    command -v pkexec >/dev/null || error 'В Linux отсутствует PolicyKit (pkexec). Он нужен для первого запуска контейнера.'
+    # A running game must never be killed by the first-run migration.
+    if pgrep -u "$(id -u)" -x liw-ui >/dev/null; then
+        error 'Перед первым запуском нового комплекта закройте все окна NexDroid.'
+    fi
+    pkexec /bin/bash "$src/setup-system" &
+    setup=$!
+    boot=false
+    while kill -0 "$setup" 2>/dev/null; do
+        if ! "$boot" && [[ $(cat "/run/nexdroid/bootstrap-$(id -u).ready" 2>/dev/null || true) == "$id:boot" ]]; then
+            "$src/runtime-exec" /usr/bin/setsid --fork /usr/bin/waydroid session start
+            boot=true
+        fi
+        sleep 0.3
+    done
+    result=0
+    wait "$setup" || result=$?
+    if "$boot"; then "$src/runtime-exec" /usr/bin/waydroid session stop || true; fi
+    ((result == 0)) || error "Первый запуск не завершён. Подробности: $logdir/standalone.log"
+    prepared=true
+fi
+base=/opt/nexdroid/current
+mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/liwinux" "$HOME/.local/share/applications"
+unit="$HOME/.config/systemd/user/liwd.service"
+if "$prepared" || ! cmp -s "$base/integration/liwd.service" "$unit"; then
+    [[ ! -f $unit ]] || cp -p "$unit" "$unit.before-standalone"
+    install -m644 "$base/integration/liwd.service" "$unit"
+    systemctl --user daemon-reload
+    systemctl --user restart liwd.service
+fi
+if [[ ! -f "$HOME/.config/liwinux/config.toml" ]]; then
+    install -m644 "$base/integration/embedded.toml" "$HOME/.config/liwinux/config.toml"
+fi
+install -m644 "$base/integration/nexdroid-keyboard.service" "$HOME/.config/systemd/user/nexdroid-keyboard.service"
+systemctl --user daemon-reload
+systemctl --user enable --now nexdroid-keyboard.service
+if "$prepared"; then systemctl --user restart nexdroid-keyboard.service; fi
+cat > "$HOME/.local/share/applications/nexdroid-standalone.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=NexDroid
+Comment=Android desktop and games
+Exec=/opt/nexdroid/current/NexDroid
+Icon=/opt/nexdroid/current/integration/nexdroid.svg
+Terminal=false
+Categories=Game;
+EOF
+export PATH="$base/host-bin:$PATH"
+if [[ $# == 0 ]]; then set -- --game dev.waydroid.manager.home; fi
+exec "$base/ui-runner" "$@"
