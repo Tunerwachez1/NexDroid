@@ -42,7 +42,7 @@ pub fn effective(
     manual.unwrap_or_else(|| enabled && event.is_some_and(|e| e.active && e.package == package))
 }
 pub struct Monitor {
-    state: Arc<Mutex<Option<Event>>>,
+    state: Arc<Mutex<Option<Arc<Event>>>>,
     stopped: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
     path: std::path::PathBuf,
@@ -141,7 +141,7 @@ impl Monitor {
                     let Some(event) = std::str::from_utf8(&line).ok().and_then(Event::parse) else {
                         break;
                     };
-                    *shared.lock().unwrap() = Some(event);
+                    *shared.lock().unwrap() = Some(Arc::new(event));
                     // ACK guarantees the host has the state before the IME callback returns.
                     if reader.get_mut().write_all(b"1\n").is_err() {
                         break;
@@ -159,7 +159,7 @@ impl Monitor {
             client,
         })
     }
-    pub fn snapshot(&self) -> Option<Event> {
+    pub fn snapshot(&self) -> Option<Arc<Event>> {
         self.state.lock().unwrap().clone()
     }
 }

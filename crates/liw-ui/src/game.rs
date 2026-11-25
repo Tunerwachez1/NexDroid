@@ -66,7 +66,7 @@ pub struct GameView {
     held_keys: BTreeMap<u16, KeyRoute>,
     text_input: bool,
     editor_focus: Option<crate::editor_focus::Monitor>,
-    editor_event: Option<crate::editor_focus::Event>,
+    editor_event: Option<std::sync::Arc<crate::editor_focus::Event>>,
     text_override: Option<bool>,
     auto_text: bool,
     resume_capture: bool,
@@ -86,6 +86,7 @@ pub struct GameView {
     /// Mouse presses, sent into Android as touches.
     pub touch: crate::touch::Touch,
     frame_pump: Option<gpui::Task<()>>,
+    input_pump: Option<gpui::Task<()>>,
     _pipe: Option<gpui::Task<()>>,
     foreground: Option<String>,
     edit_requested: bool,
@@ -139,6 +140,7 @@ impl GameView {
             icon,
             touch: Default::default(),
             frame_pump: None,
+            input_pump: None,
             _pipe: None,
             foreground: None,
             edit_requested: false,
@@ -159,6 +161,7 @@ impl GameView {
             Err(error) => v.android.error = Some(error),
         }
         v.pump(window, cx);
+        v.pump_input(window, cx);
         if v.android.running() {
             v.open_touch_pipe(cx);
             v.watch_foreground(cx);
@@ -525,10 +528,6 @@ impl GameView {
                     v.frame_pump = None;
                     return false;
                 }
-                v.sync_editor_focus(window, cx);
-                v.poll_keyboard(window, cx);
-                v.poll_mouse(cx);
-                v.touch.tick();
                 if v.preferences_checked.elapsed() >= std::time::Duration::from_secs(1) {
                     v.performance = crate::performance::Preferences::load();
                     v.reload_shortcuts();
@@ -541,6 +540,38 @@ impl GameView {
             });
             if !matches!(keep, Ok(true)) {
                 break;
+            }
+        }));
+    }
+
+    /// Input cadence is independent from frame acquisition. Both tasks remain
+    /// on GPUI's owning thread: no second Wayland display reader or input race.
+    fn pump_input(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.input_pump.is_some() {return;}
+        self.input_pump=Some(cx.spawn_in(window,async move |this,cx| {
+            let mut delay=POLL;
+            loop {
+                cx.background_executor().timer(delay).await;
+                let started=std::time::Instant::now();
+                let keep=this.update_in(cx,|v,window,cx| {
+                    if !v.android.running() {
+                        v.release_mouse();v.release_keys();v.touch.release_all();
+                        v.input_pump=None;
+                        return None;
+                    }
+                    v.sync_editor_focus(window,cx);
+                    v.poll_mouse(cx);
+                    v.poll_keyboard(window,cx);
+                    v.touch.tick();
+                    Some(if v.pointer_lock.as_ref().is_some_and(PointerLock::requested) {
+                        std::time::Duration::from_millis(1)
+                    } else {POLL})
+                });
+                let Ok(Some(interval))=keep else {break};
+                // Account for processing time, but never spin/catch up with a
+                // burst when the desktop delayed us. Keep a yielding timer.
+                delay=interval.saturating_sub(started.elapsed())
+                    .max(std::time::Duration::from_micros(250));
             }
         }));
     }
@@ -680,14 +711,19 @@ impl GameView {
 
     fn poll_mouse(&mut self, cx: &mut Context<Self>) {
         let Some(lock) = self.pointer_lock.as_mut() else { return };
-        match lock.poll() {
+        let event=lock.poll();
+        if matches!(event,Ok(CaptureEvent::Captured(..))) {self.touch.begin_capture();}
+        match event {
             Ok(CaptureEvent::Idle) => {}
-            Ok(CaptureEvent::Motion(dx, dy)) => {
+            Ok(CaptureEvent::Motion(dx, dy) | CaptureEvent::Captured(dx,dy)) => {
                 if self.capture_message.take().is_some() {
                     cx.notify();
                 }
                 if (dx, dy) != (0.0, 0.0) {
                     self.touch.input(InputEvent::MouseMove { dx, dy });
+                    // Commit camera motion before key/button frames can report
+                    // another pointer change at an older camera position.
+                    self.touch.tick();
                 }
             }
             Ok(CaptureEvent::Released) => {
@@ -770,7 +806,7 @@ impl GameView {
     fn sync_editor_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
         let event = self.editor_focus.as_ref().and_then(|m|m.snapshot());
         if event != self.editor_event { self.text_override = None; self.editor_event = event.clone(); }
-        let wanted = crate::editor_focus::effective(event.as_ref(),self.foreground.as_deref().unwrap_or(&self.package),self.auto_text,self.text_override);
+        let wanted = crate::editor_focus::effective(event.as_deref(),self.foreground.as_deref().unwrap_or(&self.package),self.auto_text,self.text_override);
         if wanted == self.text_input { return; }
         if wanted {
             self.resume_capture = self.pointer_lock.as_ref().is_some_and(PointerLock::requested);
@@ -855,6 +891,7 @@ impl GameView {
     }
     fn route_key_with_modifiers(&mut self, code:u16,pressed:bool,event_modifiers:Option<u8>,window:&mut Window,cx:&mut Context<Self>) {
         self.sync_editor_focus(window,cx);
+        self.poll_mouse(cx);
         if self.settings_open { return; }
         let trigger = Trigger::Key(code);
         if !pressed {
@@ -1113,10 +1150,12 @@ fn picture(
                 gpui::MouseButton::Left,
                 cx.listener(move |v: &mut GameView, ev: &gpui::MouseDownEvent, window, cx| {
                     window.focus(&v.focus,cx);
+                    v.poll_mouse(cx);
                     if v.mouse_captured() {
                         v.touch.button(Trigger::MouseLeft, true);
                         return;
                     }
+                    if v.pointer_lock.as_ref().is_some_and(PointerLock::requested) {return;}
                     let p = (f32::from(ev.position.x), f32::from(ev.position.y));
                     let n = crate::touch::to_norm(p, shown);
                     // Both halves are logged because "the mouse does nothing"

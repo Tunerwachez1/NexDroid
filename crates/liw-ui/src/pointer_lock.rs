@@ -46,6 +46,7 @@ pub struct PointerLock {
 }
 
 pub enum CaptureEvent {
+    Captured(f32, f32),
     Idle,
     Motion(f32, f32),
     Released,
@@ -181,7 +182,7 @@ impl PointerLock {
         }
         if self.events.locked {
             let (dx, dy) = std::mem::take(&mut self.events.delta);
-            return Ok(CaptureEvent::Motion(dx, dy));
+            return Ok(if was_locked {CaptureEvent::Motion(dx, dy)} else {CaptureEvent::Captured(dx,dy)});
         }
         if self
             .requested

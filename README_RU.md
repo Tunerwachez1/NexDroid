@@ -105,17 +105,18 @@ NexDroid и было опубликовано одним начальным beta
 Для Arch/CachyOS x86_64 доступен [единый beta-установщик](docs/unified-install.md):
 
 ```bash
-git clone https://github.com/Tunerwachez1/NexDroid.git
+# Распакуйте полный комплект с dist/android:
 cd NexDroid
 bash scripts/install-nexdroid.sh
 ```
 
-Он сам устанавливает Waydroid, на новой установке загружает Android GAPPS с
-системными приложениями и устанавливает наш Desktop/Manager. Готовый APK и его
-исходники находятся в [`android/desktop`](android/desktop). [Release-архив](https://github.com/Tunerwachez1/NexDroid/releases)
-содержит и Rust-бинарники, поэтому их не нужно компилировать самостоятельно.
-Существующие данные Android сохраняются. NVIDIA native backend и ARM translation
-пока не устанавливаются автоматически; [ограничения beta](docs/unified-install.md) обязательны к учёту.
+Новый полный комплект включает наш Android 13 GAPPS с Desktop/Manager,
+HardwareIme и ARMv7/ARM64 внутри системного образа. На новой установке берутся
+эти образы, без скачивания стандартного Android. Git содержит исходники и APK,
+но не большие образы. Опубликованный [beta.1](https://github.com/Tunerwachez1/NexDroid/releases)
+ещё не содержит новый комплект. Существующие данные Android сохраняются.
+NVIDIA native backend пока требует отдельной подготовки;
+[границы и сборка комплекта](docs/unified-install.md).
 
 Добавлен [автоматический ввод текста](docs/automatic-text-input.md): при открытии
 Android-поля игровые привязки приостанавливаются, при закрытии возвращаются.

@@ -1,4 +1,6 @@
 /target
+/dist/android/
+/dist/NexDroid-*.tar.zst
 /results/*.txt
 /tools/
 *.log

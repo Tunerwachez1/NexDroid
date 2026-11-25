@@ -95,6 +95,9 @@ const SWIPE_STEPS: u32 = 12;
 
 pub struct Engine {
     profile: Profile,
+    // Immutable profile: resolve look binding once, without allocating a name
+    // or walking all bindings on every high-rate motion/idle tick.
+    aim_binding: Option<(std::sync::Arc<str>, Binding)>,
     pool: PointerPool,
     held: HashSet<TriggerKind>,
     swipes: Vec<ActiveSwipe>,
@@ -157,8 +160,10 @@ impl Engine {
 
     /// Keeps the highest slots available to other inputs sharing this backend.
     pub fn with_pointer_limit(profile: Profile, limit: usize) -> Self {
+        let aim_binding=profile.bindings.iter().find(|(_,b)|matches!(b,Binding::Aim{..}))
+            .map(|(name,b)|(std::sync::Arc::<str>::from(name.as_str()),b.clone()));
         Self {
-            profile, pool: PointerPool::with_limit(limit), held: HashSet::new(),
+            profile, aim_binding, pool: PointerPool::with_limit(limit), held: HashSet::new(),
             swipes: Vec::new(), now_ms: 0,
             aspect: 16.0 / 9.0,
             aim_pending: None, joystick_pending: None,
@@ -375,10 +380,8 @@ impl Engine {
     /// any without a match is released.
     fn reconcile_pointers(&mut self) -> Vec<TouchAction> {
         let mut acts = Vec::new();
-        let names: Vec<String> = self.profile.bindings.keys().cloned().collect();
-        for name in names {
+        for (name,b) in &self.profile.bindings {
             // Aim, joysticks and running swipes manage their own lifetime.
-            let Some(b) = self.profile.bindings.get(&name) else { continue };
             let expects_hold = match b {
                 Binding::Tap { trigger, .. } | Binding::Toggle { trigger, .. } =>
                     Some(TriggerKind::from(trigger)),
@@ -387,7 +390,7 @@ impl Engine {
             };
             let Some(t) = expects_hold else { continue };
             if self.pool.get(&name).is_some() && !self.held.contains(&t) {
-                if let Some(id) = self.pool.release(&name) {
+                if let Some(id) = self.pool.release(name) {
                     tracing::warn!(binding = %name,
                         "released an orphaned pointer (lost key release event)");
                     acts.push(TouchAction::Up { id });
@@ -460,6 +463,22 @@ impl Engine {
     /// Current position of the aim finger (diagnostics and tests).
     /// May be off-screen in unbounded mode.
     pub fn aim_position(&self) -> Option<Norm> { self.aim_pos }
+
+    /// Capture starts with a stationary camera contact, before any game buttons.
+    /// This also avoids deferring the first actual mouse delta by another tick.
+    pub fn begin_aim(&mut self) -> Vec<TouchAction> {
+        if !self.enabled || self.aim_pos.is_some() { return Vec::new(); }
+        let Some((name, origin)) = self.profile.bindings.iter().find_map(|(name,b)| {
+            if let Binding::Aim {toggle:None,origin,..}=b {Some((name.clone(),*origin))} else {None}
+        }) else {return Vec::new()};
+        let Some(id)=self.pool.acquire(&name) else {return Vec::new()};
+        self.aim_pos=Some(origin);
+        self.aim_pending=None;
+        self.aim_down_at=None;
+        vec![TouchAction::Down{id,at:origin}]
+    }
+
+    pub fn held_inputs(&self) -> Vec<TriggerKind> { self.held.iter().copied().collect() }
 
     #[cfg(test)]
     fn forget_held_for_test(&mut self) { self.held.clear(); }
@@ -625,9 +644,7 @@ impl Engine {
         let Some((name, Binding::Aim {
             toggle, origin, sensitivity, deadzone, recenter_margin, handoff,
             nonlinear, reset_delay_ms, unbounded, safety_span,
-        })) = self.profile.bindings.iter()
-                .find(|(_, b)| matches!(b, Binding::Aim { .. }))
-                .map(|(n, b)| (n.clone(), b.clone()))
+        })) = self.aim_binding.clone()
         else { return Vec::new() };
 
         if (dx * dx + dy * dy).sqrt() < deadzone { return Vec::new(); }
@@ -837,9 +854,7 @@ impl Engine {
 
         let Some((name, Binding::Aim {
             origin, recenter_margin, reset_delay_ms, unbounded, safety_span, ..
-        })) = self.profile.bindings.iter()
-                .find(|(_, b)| matches!(b, Binding::Aim { .. }))
-                .map(|(n, b)| (n.clone(), b.clone()))
+        })) = self.aim_binding.clone()
         else { return Vec::new() };
         let Some(pos) = self.aim_pos else { return Vec::new() };
         if self.now_ms.saturating_sub(self.aim_last_move_ms) < IDLE_MS {
@@ -914,9 +929,7 @@ impl Engine {
     fn apply_aim_delta(&mut self, dx: f32, dy: f32) -> Vec<TouchAction> {
         let Some((name, Binding::Aim {
             origin, sensitivity, recenter_margin, unbounded, safety_span, ..
-        })) = self.profile.bindings.iter()
-                .find(|(_, b)| matches!(b, Binding::Aim { .. }))
-                .map(|(n, b)| (n.clone(), b.clone()))
+        })) = self.aim_binding.clone()
         else { return Vec::new() };
         let (Some(pos), Some(id)) = (self.aim_pos, self.pool.get(&name))
         else { return Vec::new() };

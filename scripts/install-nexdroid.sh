@@ -18,6 +18,22 @@ fi
 apk="$repo/android/desktop/prebuilt/waydroid-desktop.apk"
 [[ -f "$apk" && -f "$apk.sha256" ]] || fail 'The Android APK is missing from this checkout/release.'
 (cd "$(dirname "$apk")" && sha256sum -c waydroid-desktop.apk.sha256)
+bundle="$repo/dist/android"
+if [[ ! -f /var/lib/waydroid/waydroid.cfg ]]; then
+    # A full release ships OUR images. Never silently substitute stock OTA Android.
+    for file in system.img vendor.img manifest.json SHA256SUMS; do
+        [[ -f "$bundle/$file" && ! -L "$bundle/$file" ]] || fail 'Bundled NexDroid Android is missing. Use the full release archive; a source checkout alone does not contain Android images.'
+    done
+    (cd "$bundle"; sha256sum -c SHA256SUMS)
+    python3 - "$bundle/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+if not (m.get('format') == 1 and m.get('android') == 13 and m.get('arch') == 'x86_64'
+        and m.get('userdata_included') is False):
+    raise SystemExit('Unsupported NexDroid Android bundle')
+PY
+    [[ ! -e /etc/waydroid-extra/images && ! -e /usr/share/waydroid-extra/images ]] || fail 'Preinstalled Waydroid images already exist. Refusing to overwrite them.'
+fi
 
 echo 'NexDroid beta: install Waydroid, Android and the NexDroid desktop.'
 echo 'Existing Android images and application data will be retained.'
@@ -32,6 +48,11 @@ if ! "$dry"; then
     done
 fi
 if [[ ! -f /var/lib/waydroid/waydroid.cfg ]]; then
+    run sudo install -d -m755 /usr/share/waydroid-extra/images
+    for file in system.img vendor.img; do
+        run sudo install -m644 "$bundle/$file" "/usr/share/waydroid-extra/images/$file"
+    done
+    # Waydroid recognizes this preinstalled-images path and skips OTA downloads.
     run sudo waydroid init -s GAPPS
 else
     echo 'Keeping the existing Android installation (no init --force).'
@@ -97,4 +118,4 @@ run systemctl --user enable --now nexdroid-keyboard.service
 run waydroid session stop
 if "$dry"; then echo 'Dry run complete; nothing was installed.'
 else echo 'NexDroid installed. Open NexDroid Desktop from your application menu.'; fi
-echo 'Google Play may require its normal device registration/sign-in; ARM translation and NVIDIA native backends are separate compatibility components.'
+echo 'Bundled Android includes ARMv7/ARM64. NVIDIA still requires its exact-version native backend. Google Play may require normal registration/sign-in.'

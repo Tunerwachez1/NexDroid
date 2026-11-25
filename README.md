@@ -36,7 +36,7 @@ as an official Liwinux release.
 ### Changes in the NexDroid beta
 
 - [automatic text input](docs/automatic-text-input.md): Android editor focus suspends game bindings; F8 remains a manual override;
-- [unified beta installer](docs/unified-install.md) for Arch/CachyOS x86_64: automatically installs Waydroid, downloads a fresh GAPPS Android and installs the included Android Desktop/HardwareIme APK;
+- [unified beta installer](docs/unified-install.md) for Arch/CachyOS x86_64: the new full bundle uses included custom Android images with Desktop/HardwareIme and ARMv7/ARM64 (not yet in published beta.1);
 
 - embedded Android window with a native Rust sidebar and real F11 fullscreen;
 - Russian control editor with selectable and movable touch controls;
@@ -57,11 +57,11 @@ as an official Liwinux release.
 
 ## What was fixed compared with Liwinux
 
-**New installation:** run `bash scripts/install-nexdroid.sh` from this checkout
-or the [release archive](https://github.com/Tunerwachez1/NexDroid/releases).
-The archive includes Rust binaries and the Android APK. No separate manual
-Waydroid download is needed. Existing data is retained. NVIDIA native backend
-and ARM translation provisioning remain separate beta limitations; read
+**New installation:** run `bash scripts/install-nexdroid.sh` from the full bundle
+with `dist/android` images. The source checkout alone does not contain Android.
+Published [beta.1](https://github.com/Tunerwachez1/NexDroid/releases) predates the
+new image bundle. Existing data is retained. NVIDIA native backend provisioning
+remains a separate beta limitation; read
 [installation details](docs/unified-install.md).
 
 Most of these fixes were developed before NexDroid's first public snapshot and

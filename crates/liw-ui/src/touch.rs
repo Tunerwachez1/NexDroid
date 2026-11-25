@@ -164,6 +164,18 @@ impl Touch {
         }
     }
 
+    /// Establish camera as Android's first contact. If capture is enabled while
+    /// walking/firing, re-seat the held controls AFTER the camera's own frame.
+    pub fn begin_capture(&mut self) {
+        if self.backend.is_none() || !self.engine.as_ref().is_some_and(|e|
+            e.profile().bindings.values().any(|b|matches!(b,Binding::Aim{toggle:None,..}))) {return;}
+        let held=self.engine.as_ref().unwrap().held_inputs();
+        self.release_all();
+        let camera=self.engine.as_mut().unwrap().begin_aim();
+        self.send(&camera);
+        for key in held {self.input(InputEvent::Press(key));}
+    }
+
     pub fn has_binding(&self, trigger: &Trigger) -> bool {
         self.engine.as_ref().is_some_and(|engine| {
             engine.profile().bindings.values().any(|binding| binding.triggers().contains(trigger))
@@ -401,6 +413,77 @@ at = { x = 0.75, y = 0.5 }
             engine.handle(InputEvent::Release(TriggerKind::MouseLeft)),
             vec![TouchAction::Up { id: 0 }],
         );
+    }
+
+    #[test]
+    fn capture_keeps_camera_first_while_crouching_strafing_and_firing() {
+        use std::{io::Read,os::{fd::OwnedFd,unix::net::UnixStream}};
+        let (writer,mut reader)=UnixStream::pair().unwrap();
+        writer.set_nonblocking(true).unwrap();reader.set_nonblocking(true).unwrap();
+        let p=Profile::from_toml(r#"
+name="test"
+package="com.test"
+[bindings.look]
+type="aim"
+origin={x=0.7,y=0.5}
+sensitivity=0.001
+deadzone=0.0
+unbounded=true
+[bindings.walk]
+type="joystick"
+up={Key=17}
+down={Key=31}
+left={Key=30}
+right={Key=32}
+center={x=0.2,y=0.7}
+radius=0.05
+[bindings.crouch]
+type="tap"
+trigger={Key=29}
+at={x=0.9,y=0.9}
+[bindings.fire]
+type="fire"
+at={x=0.85,y=0.7}
+"#).unwrap();
+        let mut t=Touch::default();t.load_profile(Some(p));
+        t.attach(std::fs::File::from(OwnedFd::from(writer)),1920,1080);
+        let mut drain=|| {
+            let mut bytes=Vec::new();let mut buf=[0;4096];
+            loop {match reader.read(&mut buf) {
+                Ok(0)=>break,Ok(n)=>bytes.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>break,Err(e)=>panic!("{e}")
+            }}
+            assert_eq!(bytes.len()%24,0);
+            bytes.chunks_exact(24).map(|b|(
+                u16::from_ne_bytes(b[16..18].try_into().unwrap()),
+                u16::from_ne_bytes(b[18..20].try_into().unwrap()),
+                i32::from_ne_bytes(b[20..24].try_into().unwrap())
+            )).collect::<Vec<_>>()
+        };
+        // Capture may be enabled after buttons are already held.
+        for key in [TriggerKind::Key(17),TriggerKind::Key(29),TriggerKind::MouseLeft] {t.input(InputEvent::Press(key));}
+        t.tick();drain();
+        t.begin_capture();
+        let events=drain();
+        let frames=events.split_inclusive(|e|*e==(0,0,0)).collect::<Vec<_>>();
+        assert!(frames[0].iter().any(|e|*e==(3,0x39,-1)),"old contacts lift first");
+        assert_eq!(frames[1],[(3,0x2f,0),(3,0x39,0),(3,0x35,1344),(3,0x36,540),(3,0x3a,50),(0,0,0)]);
+        for frame in &frames[2..] {assert!(!frame.contains(&(3,0x2f,0)),"buttons must not reuse camera slot");}
+        // First real movement is a move immediately, not another Down/deferred tick.
+        t.input(InputEvent::MouseMove{dx:5.0,dy:0.0});t.tick();
+        let motion=drain();assert!(motion.contains(&(3,0x35,1354)));
+        let camera=t.engine.as_ref().unwrap().aim_position().unwrap();
+        // Repeated release/repress combinations must neither reseat nor move camera.
+        for _ in 0..20 {
+            for key in [TriggerKind::Key(17),TriggerKind::Key(29),TriggerKind::MouseLeft] {
+                t.input(InputEvent::Release(key));t.input(InputEvent::Press(key));
+            }
+            t.tick();
+            let events=drain();
+            assert!(!events.contains(&(3,0x2f,0)),"camera must remain untouched by button frames");
+            assert_eq!(t.engine.as_ref().unwrap().aim_position(),Some(camera));
+        }
+        assert_eq!(t.engine.as_ref().unwrap().active_pointers(),4);
     }
 
     #[test]
