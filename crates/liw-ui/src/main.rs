@@ -123,7 +123,7 @@ fn main() {
                 // our own caption buttons (see `shell::caption`); under SSD
                 // the compositor still draws real ones.
                 titlebar: Some(TitlebarOptions {
-                    title: Some("NexDroid".into()),
+                    title: Some("WAYTRIVO".into()),
                     appears_transparent: true,
                     traffic_light_position: None,
                 }),

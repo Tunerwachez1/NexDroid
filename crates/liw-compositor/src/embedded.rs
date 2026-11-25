@@ -36,7 +36,16 @@ pub struct Embedded {
     width: Arc<AtomicI32>,
     height: Arc<AtomicI32>,
     running: Arc<AtomicBool>,
-    keyboard: channel::Sender<(u16, bool)>,
+    input: channel::Sender<Input>,
+    clipboard: ClipboardOutput,
+}
+
+type ClipboardOutput = Arc<Mutex<Option<String>>>;
+
+enum Input {
+    Key(u16, bool),
+    Paste(Option<String>),
+    ClipboardEnabled(bool),
 }
 
 impl Embedded {
@@ -55,7 +64,19 @@ impl Embedded {
 
     /// Forward an evdev key to the embedded Wayland seat.
     pub fn key(&self, code: u16, pressed: bool) {
-        let _ = self.keyboard.send((code, pressed));
+        let _ = self.input.send(Input::Key(code, pressed));
+    }
+
+    pub fn set_clipboard_enabled(&self, enabled: bool) {
+        let _ = self.input.send(Input::ClipboardEnabled(enabled));
+    }
+
+    pub fn paste(&self, text: Option<String>) {
+        let _ = self.input.send(Input::Paste(text));
+    }
+
+    pub fn take_clipboard(&self) -> Option<String> {
+        self.clipboard.lock().ok()?.take()
     }
 
     /// Stops the thread. The compositor's socket goes with it, so anything
@@ -92,14 +113,16 @@ pub fn spawn_with_mode(socket_name: &str, width: i32, height: i32, refresh_mhz: 
     let socket = ListeningSocketSource::with_name(socket_name)
         .map_err(|e| format!("could not bind the socket {socket_name}: {e}"))?;
 
-    let (keyboard, key_events) = channel::channel();
+    let (input, input_events) = channel::channel();
+    let clipboard = ClipboardOutput::default();
+    let thread_clipboard = clipboard.clone();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<GuestHandle, String>>();
 
     let (tf, tw, th, trunning) = (frames.clone(), w.clone(), h.clone(), running.clone());
     std::thread::Builder::new()
         .name("liw-compositor".into())
         .spawn(move || {
-            match run(socket, tf, tw, th, trunning.clone(), ready_tx.clone(), refresh_mhz, key_events) {
+            match run(socket, tf, tw, th, trunning.clone(), ready_tx.clone(), refresh_mhz, input_events, thread_clipboard) {
                 Ok(()) => tracing::info!("compositor thread finished"),
                 Err(e) => {
                     tracing::error!(error = %e, "compositor thread failed");
@@ -113,7 +136,7 @@ pub fn spawn_with_mode(socket_name: &str, width: i32, height: i32, refresh_mhz: 
         .map_err(|e| format!("could not start the compositor thread: {e}"))?;
 
     match ready_rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(Ok(guest)) => Ok(Embedded { frames, guest, width: w, height: h, running, keyboard }),
+        Ok(Ok(guest)) => Ok(Embedded { frames, guest, width: w, height: h, running, input, clipboard }),
         Ok(Err(e)) => Err(e),
         Err(_) => Err("the compositor did not come up within ten seconds".into()),
     }
@@ -127,7 +150,8 @@ fn run(
     running: Arc<AtomicBool>,
     ready: std::sync::mpsc::Sender<Result<GuestHandle, String>>,
     refresh_mhz: i32,
-    key_events: channel::Channel<(u16, bool)>,
+    input_events: channel::Channel<Input>,
+    clipboard: ClipboardOutput,
 ) -> Result<(), String> {
     let (w0, h0) = (want_w.load(Ordering::Relaxed), want_h.load(Ordering::Relaxed));
     let mut headless = Headless::new(w0, h0)?;
@@ -160,9 +184,22 @@ fn run(
 
     let handle = event_loop.handle();
     let start = Instant::now();
-    handle.insert_source(key_events, move |event, _, state| {
-        if let channel::Event::Msg((code, pressed)) = event {
-            state.key(code, pressed, start.elapsed().as_millis() as u32);
+    let clipboard_slot = clipboard.clone();
+    handle.insert_source(input_events, move |event, _, state| {
+        match event {
+            channel::Event::Msg(Input::Key(code, pressed)) => {
+                state.clipboard_key(code, pressed, start.elapsed().as_millis() as u32);
+            }
+            channel::Event::Msg(Input::Paste(text)) => {
+                state.paste_clipboard(text, start.elapsed().as_millis() as u32);
+            }
+            channel::Event::Msg(Input::ClipboardEnabled(enabled)) => {
+                state.clipboard_enabled(enabled);
+                if !enabled && let Ok(mut slot) = clipboard_slot.lock() {
+                    *slot = None;
+                }
+            }
+            channel::Event::Closed => {}
         }
     }).map_err(|e| format!("keyboard source: {e}"))?;
     handle
@@ -198,6 +235,12 @@ fn run(
         event_loop
             .dispatch(Some(Duration::from_millis(4)), &mut state)
             .map_err(|e| format!("dispatch: {e}"))?;
+
+        if let Some(text) = state.poll_clipboard()
+            && let Ok(mut slot) = clipboard.lock()
+        {
+            *slot = Some(text);
+        }
 
         let size = (want_w.load(Ordering::Relaxed), want_h.load(Ordering::Relaxed));
         headless.resize(size.0, size.1)?;
@@ -312,7 +355,8 @@ mod tests {
             width: Arc::new(AtomicI32::new(1)),
             height: Arc::new(AtomicI32::new(1)),
             running: Arc::new(AtomicBool::new(true)),
-            keyboard: channel::channel().0,
+            input: channel::channel().0,
+            clipboard: ClipboardOutput::default(),
         };
         e.request_size(1600, 900);
         assert_eq!(e.requested_size(), (1600, 900));
@@ -328,7 +372,8 @@ mod tests {
             width: Arc::new(AtomicI32::new(1)),
             height: Arc::new(AtomicI32::new(1)),
             running: Arc::new(AtomicBool::new(true)),
-            keyboard: channel::channel().0,
+            input: channel::channel().0,
+            clipboard: ClipboardOutput::default(),
         };
         e.request_size(0, -5);
         assert_eq!(e.requested_size(), (1, 1));
@@ -342,7 +387,8 @@ mod tests {
             width: Arc::new(AtomicI32::new(1)),
             height: Arc::new(AtomicI32::new(1)),
             running: Arc::new(AtomicBool::new(true)),
-            keyboard: channel::channel().0,
+            input: channel::channel().0,
+            clipboard: ClipboardOutput::default(),
         };
         assert!(e.is_running());
         e.stop();

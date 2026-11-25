@@ -149,4 +149,9 @@ impl HelperClient {
         self.proxy.call("NetDiagnose", &())
             .await.map_err(|e| HelperError::Call(e.to_string()))
     }
+    pub async fn net_repair(&self) -> Result<String, HelperError> {
+        self.proxy.call("NetRepair", &())
+            .await.map_err(|e| HelperError::Call(e.to_string()))
+    }
+
 }

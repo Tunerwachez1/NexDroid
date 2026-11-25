@@ -63,6 +63,7 @@
     "show_fps": "Show window FPS", "vsync": "VSync — window synchronization is managed by the Wayland compositor. The current GPUI does not expose a toggle.",
     "language": "Settings language", "import": "Import language JSON…", "save": "Save and apply",
     "language_help": "English and Russian are included. Import a JSON with id, name and strings fields to add a language. Missing translations use English. The preview changes immediately; save to keep your choice.",
+    "share_clipboard": "Share clipboard with Android", "share_clipboard_help": "Copy text in the Android window to move it to Linux. To paste Linux text into Android, press Ctrl+V in the active NexDroid window.",
     "window_preferences": "Window", "fullscreen_start": "Start Android in fullscreen", "fullscreen_start_help": "Applies when a new Android window opens. Configure the fullscreen shortcut in Shortcuts.",
     "escape_behavior": "Esc key behavior", "escape_fullscreen": "Exit fullscreen", "escape_mouse": "Release the mouse cursor",
     "escape_help": "When both options are on, the first Esc releases a captured cursor; the next exits fullscreen. When a host action is disabled, Esc remains available to Android and the game. Other combinations are configured in Shortcuts. Esc always closes this settings form.",

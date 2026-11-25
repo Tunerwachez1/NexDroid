@@ -677,7 +677,7 @@ async fn main() -> Result<()> {
                 } else if warming_up {
                     unhealthy=0;
                     SessionState::Starting
-                } else if h.is_healthy() {
+                } else if !h.requires_recovery() {
                     if unhealthy > 0 { tracing::info!("session recovered"); }
                     unhealthy = 0; attempts = 0;
 
@@ -714,7 +714,11 @@ async fn main() -> Result<()> {
                         });
                     }
                     was_running = true;
-                    SessionState::Running
+                    if h.is_healthy() {
+                        SessionState::Running
+                    } else {
+                        SessionState::Degraded
+                    }
                 } else {
                     unhealthy += 1;
                     tracing::warn!(
@@ -728,6 +732,11 @@ async fn main() -> Result<()> {
                 {
                     let mut slot = state.write().await;
                     if *slot != next {
+                        if next == SessionState::Degraded && !h.requires_recovery() {
+                            tracing::warn!(
+                                "Android is running without an IP address; check DHCP and the host firewall on waydroid0"
+                            );
+                        }
                         *slot = next;
                         drop(slot);
                         let m = iface.get().await;
@@ -737,6 +746,9 @@ async fn main() -> Result<()> {
 
                 // Threshold: do not restart on a single dip.
                 if cfg.auto_recover
+                    && h.session_running
+                    && h.requires_recovery()
+                    && !warming_up
                     && unhealthy >= cfg.unhealthy_threshold
                     && attempts < cfg.max_recovery_attempts
                 {
@@ -752,7 +764,8 @@ async fn main() -> Result<()> {
                     }
                     boot_grace=liw_core::session::BootGrace::default();
                     unhealthy = 0;
-                } else if attempts >= cfg.max_recovery_attempts && unhealthy > 0 {
+                } else if cfg.auto_recover && attempts >= cfg.max_recovery_attempts
+                    && unhealthy == cfg.unhealthy_threshold {
                     tracing::error!(
                         "recovery attempts exhausted ({}); manual intervention needed",
                         cfg.max_recovery_attempts);

@@ -104,6 +104,8 @@ pub struct GameView {
     shortcuts:crate::shortcuts::Shortcuts,
     shortcut_error:String,
     preferences_checked: std::time::Instant,
+    clipboard_active: bool,
+    layout_switch_pending: bool,
 }
 
 impl GameView {
@@ -153,6 +155,8 @@ impl GameView {
             shortcuts:crate::shortcuts::Shortcuts::load().unwrap_or_default(),
             shortcut_error:String::new(),
             preferences_checked: std::time::Instant::now(),
+            clipboard_active: false,
+            layout_switch_pending: false,
         };
         window.focus(&v.focus,cx);
         if v.performance.fullscreen_start && !window.is_fullscreen() { v.toggle_fullscreen(window,cx); }
@@ -521,7 +525,7 @@ impl GameView {
         }
         self.frame_pump = Some(cx.spawn_in(window, async move |this, cx| loop {
             cx.background_executor().timer(POLL).await;
-            let keep = this.update_in(cx, |v, window, cx| {
+            let keep = this.update_in(cx, |v, _window, cx| {
                 if !v.android.running() {
                     v.release_mouse();
                     v.touch.release_all();
@@ -559,6 +563,7 @@ impl GameView {
                         v.input_pump=None;
                         return None;
                     }
+                    v.poll_clipboard(window, cx);
                     v.sync_editor_focus(window,cx);
                     v.poll_mouse(cx);
                     v.poll_keyboard(window,cx);
@@ -781,6 +786,7 @@ impl GameView {
     }
 
     fn release_keys(&mut self) {
+        self.layout_switch_pending = false;
         for (&code, route) in &mut self.held_keys {
             if matches!(route, KeyRoute::Android) {
                 if let Some(embedded) = &self.android.embedded {
@@ -840,6 +846,18 @@ impl GameView {
         cx.notify();
     }
 
+    fn poll_clipboard(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(embedded) = &self.android.embedded else { return };
+        let active = self.performance.share_clipboard && window.is_window_active() && !self.settings_open;
+        if active != self.clipboard_active {
+            self.clipboard_active = active;
+            embedded.set_clipboard_enabled(active);
+        }
+        if let Some(text) = embedded.take_clipboard().filter(|_| active) {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+    }
+
     fn poll_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(keyboard) = &mut self.keyboard else { return };
         match keyboard.poll() {
@@ -894,6 +912,7 @@ impl GameView {
         self.poll_mouse(cx);
         if self.settings_open { return; }
         let trigger = Trigger::Key(code);
+        let layout_modifier = matches!(code, 42 | 54 | 56 | 100);
         if !pressed {
             match self.held_keys.remove(&code) {
                 Some(KeyRoute::Android) => {
@@ -904,7 +923,20 @@ impl GameView {
                 Some(KeyRoute::Binding) => self.touch.input(InputEvent::Release(TriggerKind::Key(code))),
                 _ => {}
             }
+            if self.layout_switch_pending && layout_modifier && self.held_keys.is_empty() {
+                self.layout_switch_pending = false;
+                if let Some(embedded) = &self.android.embedded {
+                    // Android 13 recognizes Meta+Space on the physical Wayland keyboard.
+                    embedded.key(125, true);
+                    embedded.key(57, true);
+                    embedded.key(57, false);
+                    embedded.key(125, false);
+                }
+            }
             return;
+        }
+        if !layout_modifier {
+            self.layout_switch_pending = false;
         }
         if self.held_keys.contains_key(&code) {
             return;
@@ -912,6 +944,12 @@ impl GameView {
         use crate::shortcuts::{Action,CTRL,SHIFT,ALT,SUPER};
         let held=|codes:&[u16]|codes.iter().any(|key|self.held_keys.contains_key(key));
         let modifiers=event_modifiers.unwrap_or_else(||u8::from(held(&[29,97]))*CTRL | u8::from(held(&[42,54]))*SHIFT | u8::from(held(&[56,100]))*ALT | u8::from(held(&[125,126]))*SUPER);
+        if !self.editing_foreground() && self.held_keys.len() == 1
+            && ((matches!(code, 42 | 54) && modifiers == ALT)
+                || (matches!(code, 56 | 100) && modifiers == SHIFT))
+        {
+            self.layout_switch_pending = true;
+        }
         self.held_keys.insert(code, KeyRoute::Shortcut);
         if let Some(action)=self.shortcuts.resolve(code,modifiers,self.touch.aim_key) {
             let handled=match action {
@@ -923,8 +961,12 @@ impl GameView {
                 Action::CaptureMouse if !self.editing_foreground() && !self.text_input=>{self.toggle_mouse(window);cx.notify();true},
                 _=>false,
             };
-            if handled {return;}
+            if handled {
+                self.layout_switch_pending = false;
+                return;
+            }
         }
+        let clipboard_chord = self.clipboard_active && modifiers == CTRL && matches!(code, 46 | 47);
         match code {
             1 if self.performance.escape_mouse && self.pointer_lock.as_ref().is_some_and(PointerLock::requested) => {
                 self.release_mouse();
@@ -938,14 +980,20 @@ impl GameView {
                 self.editor_key(code);
                 cx.notify();
             }
-            _ if !self.text_input && self.touch.has_binding(&trigger) => {
+            _ if !clipboard_chord && !self.text_input && self.touch.has_binding(&trigger) => {
                 self.held_keys.insert(code, KeyRoute::Binding);
                 self.touch.input(InputEvent::Press(TriggerKind::Key(code)));
             }
             _ => {
                 self.held_keys.insert(code, KeyRoute::Android);
                 if let Some(embedded) = &self.android.embedded {
-                    embedded.key(code, true);
+                    if self.clipboard_active && code == 47 && modifiers == CTRL {
+                        let text = cx.read_from_clipboard().and_then(|item| item.text())
+                            .filter(|text| text.len() <= liw_compositor::state::MAX_CLIPBOARD_BYTES);
+                        embedded.paste(text);
+                    } else {
+                        embedded.key(code, true);
+                    }
                 }
             }
         }

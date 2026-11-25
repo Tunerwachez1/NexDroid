@@ -101,22 +101,12 @@ systemctl daemon-reload
 systemctl reload dbus 2>/dev/null || systemctl reload dbus-broker 2>/dev/null || true
 systemctl start liwd-helper.service
 systemctl start waydroid-container.service
-home=$(getent passwd "$uid" | cut -d: -f6)
-[[ -n "$home" ]] || exit 1
-keyboard_dir="$home/.local/share/waydroid/data/local/tmp/waydroid-hardware-keyboard"
-
-if "$fresh" || [[ ! -d "$keyboard_dir" ]]; then
+if "$fresh"; then
+    echo "NexDroid: preparing first Android boot"
     printf '%s:boot\n' "$id" > "$ready"
-    if "$fresh"; then
-        "$base/runtime-exec" /usr/bin/python3 "$base/finish-android.py" "$uid"
-    else
-        "$base/runtime-exec" /usr/bin/python3 "$base/finish-android.py" "$uid" --keyboard-only ||
-            echo "WARNING: Keyboard recovery failed" >&2
-    fi
+    "$base/runtime-exec" /usr/bin/python3 "$base/finish-android.py" "$uid" 9>&-
     unlink "$ready"
-    if "$fresh"; then
-        unlink /var/lib/nexdroid/bootstrap/first-boot-pending
-    fi
+    unlink /var/lib/nexdroid/bootstrap/first-boot-pending
 fi
 printf '%s\n' "$id" > /opt/nexdroid/ready
 trap - ERR

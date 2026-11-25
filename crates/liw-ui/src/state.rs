@@ -91,6 +91,7 @@ pub struct AppState {
     pub error: Option<String>,
     /// A long call is in flight; the button that started it stays disabled.
     pub busy: Option<&'static str>,
+    pub network_report: Vec<String>,
     _watch: Option<Task<()>>,
 }
 
@@ -116,6 +117,7 @@ impl AppState {
             show_system: false,
             error: None,
             busy: None,
+            network_report: Vec::new(),
             _watch: None,
         };
         s.reload(cx);

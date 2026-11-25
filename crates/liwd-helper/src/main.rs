@@ -259,10 +259,16 @@ impl Helper {
         }
         self.authorize(&hdr, "id.liwinux.helper.resources", true).await?;
         // The embedded wl_output supplies the selected physical resolution.
-        // Clear legacy logical overrides once, before the game is launched.
-        run_dumpsys(&["wm", "size", "reset"]).await?;
-        let density = if dpi == 0 { "reset".to_owned() } else { dpi.to_string() };
-        run_dumpsys(&["wm", "density", &density]).await?;
+        // A redundant reset can run Android's rotation animation even when
+        // the physical size already matches, crashing some GPU backends.
+        let size = run_dumpsys(&["wm", "size"]).await?;
+        if size.lines().any(|line| line.starts_with("Override size:")) {
+            run_dumpsys(&["wm", "size", "reset"]).await?;
+        }
+        let output = run_dumpsys(&["wm", "density"]).await?;
+        if let Some(density) = density_change(&output, dpi) {
+            run_dumpsys(&["wm", "density", &density]).await?;
+        }
         Ok(())
     }
     async fn set_resources(&self, cpus: u32, memory_mib: u32,
@@ -581,24 +587,36 @@ impl Helper {
         let mut done: Vec<String> = Vec::new();
 
         if d.active_firewall == "ufw" {
-            for args in [
-                vec!["allow", "in", "on", "waydroid0", "to", "any", "port", "67", "proto", "udp",
-                     "comment", "liwinux dhcp"],
-                vec!["allow", "in", "on", "waydroid0", "to", "any", "port", "53",
-                     "comment", "liwinux dns"],
-                vec!["route", "allow", "in", "on", "waydroid0",
-                     "comment", "liwinux outbound"],
-            ] {
-                let st = Command::new("ufw").args(&args).stdin(Stdio::null())
-                    .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().await;
-                if matches!(st, Ok(s) if s.success()) {
-                    // Write the whole rule: a truncated report ("ufw route allow in on")
-                    // hides what was done and makes it unauditable.
-                    done.push(format!("ufw {}", args.join(" ")));
+            for args in net::ufw_rules(&d) {
+                // The standalone runtime replaces /usr. Run the host's UFW
+                // in the system manager's mount namespace with fixed argv.
+                let mut command = if std::env::var_os("NEXDROID_PRIVATE_RUNTIME").is_some() {
+                    let mut command = Command::new("systemd-run");
+                    command.args(["--quiet", "--wait", "--collect", "--pipe", "--",
+                        "/usr/bin/env", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "ufw"]);
+                    command
+                } else {
+                    let mut command = Command::new("ufw");
+                    command.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+                    command
+                };
+                let rule = format!("ufw {}", args.join(" "));
+                let status = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    command.args(&args).stdin(Stdio::null()).stdout(Stdio::null())
+                        .stderr(Stdio::null()).kill_on_drop(true).status(),
+                ).await;
+                if matches!(status, Ok(Ok(s)) if s.success()) {
+                    done.push(rule);
+                } else {
+                    done.push(format!("Could not apply: {rule}"));
                 }
             }
-            let _ = Command::new("ufw").arg("reload").stdout(Stdio::null()).status().await;
+            if d.outgoing_interface.is_none() {
+                done.push("No guest egress route found; forwarding rule was skipped".into());
+            }
+        } else {
+            done.extend(d.recommendations);
         }
 
         if !d.hijack_rules.is_empty() {
@@ -613,6 +631,20 @@ impl Helper {
         if done.is_empty() { done.push("nothing to do".into()); }
         Ok(done.join("\n"))
     }
+}
+
+fn density_change(output: &str, dpi: u32) -> Option<String> {
+    let read = |prefix| {
+        output.lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+    };
+    let override_dpi = read("Override density:");
+    if dpi == 0 {
+        return override_dpi.map(|_| "reset".into());
+    }
+    let current = override_dpi.or_else(|| read("Physical density:"));
+    (current != Some(dpi)).then(|| dpi.to_string())
 }
 
 /// Validates a logcat buffer name against a fixed list.
@@ -752,4 +784,15 @@ async fn main() -> Result<()> {
         _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn display_density_changes_only_if_needed() {
+    assert_eq!(density_change("Physical density: 180", 0), None);
+    assert_eq!(density_change("Physical density: 180", 180), None);
+    assert_eq!(density_change("Physical density: 180", 400).as_deref(), Some("400"));
+    let overridden = "Physical density: 180\nOverride density: 400";
+    assert_eq!(density_change(overridden, 400), None);
+    assert_eq!(density_change(overridden, 0).as_deref(), Some("reset"));
 }

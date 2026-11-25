@@ -64,7 +64,68 @@ def patch_host_driver(out):
             'file_format_version': '1.0.0', 'ICD': {
                 'library_path': f'libnvidia-egl-{name}.so.1'}}) + '\n')
 
+def patch_clipboard(out):
+    services = out / "usr/lib/waydroid/tools/services"
+    manager = services / "clipboard_manager.py"
+    adapter = pathlib.Path(__file__).resolve().parent / "nexdroid_clipboard.py"
+
+    for name in ("wl-copy", "wl-paste", "xclip"):
+        if not (out / "usr/bin" / name).is_file():
+            raise RuntimeError("Missing clipboard dependency: " + name)
+
+    shutil.copyfile(adapter, services / "nexdroid_clipboard.py")
+
+    text = manager.read_text()
+    original = "    import pyclip"
+    replacement = "    from tools.services import nexdroid_clipboard as pyclip"
+
+    if replacement not in text:
+        if text.count(original) != 1:
+            raise RuntimeError("Unsupported Waydroid clipboard manager layout")
+        text = text.replace(original, replacement, 1)
+
+    if "    canClip = pyclip.enabled()" not in text:
+        if text.count("    canClip = True") != 1:
+            raise RuntimeError("Unsupported Waydroid clipboard manager feature check")
+        text = text.replace("    canClip = True", "    canClip = pyclip.enabled()", 1)
+    manager.write_text(text)
+
+
+def patch_post_android_boot(out):
+    actions = out / "usr/lib/waydroid/tools/actions"
+    manager = actions / "container_manager.py"
+    standalone = pathlib.Path(__file__).resolve().parent.parent / "dist/standalone"
+    shutil.copyfile(standalone / "post-android-boot.py", actions / "nexdroid_post_boot.py")
+
+    text = manager.read_text()
+    start = "        do_start(self.args, session)"
+    stop = "    logging.info(\"Stopping container\")"
+    if "self.args.nexdroid_post_boot = Gio.Subprocess.new" in text:
+        return
+    if text.count(start) != 1 or text.count(stop) != 1 or text.count("from gi.repository import GLib") != 1:
+        raise RuntimeError("Unsupported Waydroid container manager layout")
+    text = text.replace("from gi.repository import GLib", "from gi.repository import Gio, GLib")
+    text = text.replace(start, start + """
+        if int(uid) > 0:
+            try:
+                self.args.nexdroid_post_boot = Gio.Subprocess.new(
+                    ["/usr/bin/python3", os.path.join(os.path.dirname(__file__), "nexdroid_post_boot.py"), str(uid)],
+                    Gio.SubprocessFlags.NONE,
+                )
+            except GLib.Error:
+                logging.warning("Could not start NexDroid post-boot maintenance")""")
+    text = text.replace(stop, stop + """
+    worker = getattr(args, "nexdroid_post_boot", None)
+    if worker is not None:
+        worker.force_exit()
+        del args.nexdroid_post_boot
+""")
+    manager.write_text(text)
+
+
 def finish(out):
+    patch_clipboard(out)
+    patch_post_android_boot(out)
     patch_host_driver(out)
     (out / 'usr/lib/waydroid/waydroid.py').chmod(0o755)
     config = out / 'usr/lib/waydroid/tools/config/__init__.py'
@@ -104,7 +165,7 @@ def build(out):
             providers.setdefault(name(expr), n)
     selected, pending = set(), ['waydroid', 'bubblewrap', 'coreutils', 'util-linux',
         'iproute2', 'procps-ng', 'kmod', 'e2fsprogs', 'systemd', 'dbus', 'polkit', 'zenity', 'binutils',
-        'gawk', 'grep', 'sed', 'findutils', 'diffutils', 'which', 'psmisc']
+        'gawk', 'grep', 'sed', 'findutils', 'diffutils', 'which', 'psmisc', 'wl-clipboard', 'xclip']
     while pending:
         expr = pending.pop()
         n = providers.get(name(expr))

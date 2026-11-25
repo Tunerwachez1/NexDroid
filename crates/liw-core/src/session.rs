@@ -75,6 +75,15 @@ impl Health {
             && self.has_ip && self.boot_completed
             && self.composer_alive && !self.composer_stale
     }
+    /// Network-only failures must not restart Android.
+    pub fn requires_recovery(&self) -> bool {
+        !self.session_running
+            || !self.container_running
+            || !self.boot_completed
+            || !self.composer_alive
+            || self.composer_stale
+    }
+
     /// So a human can read what is missing.
     pub fn failures(&self) -> Vec<&'static str> {
         let mut v = Vec::new();
@@ -240,8 +249,15 @@ impl Supervisor {
         tracing::info!(?socket, "starting session (detached)");
         let mut cmd = Command::new("setsid");
         cmd.args(["--fork", "waydroid", "session", "start"]);
+        cmd.env(
+            "NEXDROID_HOST_WAYLAND_DISPLAY",
+            std::env::var_os("WAYLAND_DISPLAY").unwrap_or_default(),
+        );
         if let Some(d) = &socket {
             cmd.env("WAYLAND_DISPLAY", d);
+            cmd.env_remove("WAYLAND_SOCKET");
+            // Android 13+ uses the composer selection protocol in our nested display.
+            cmd.env("NEXDROID_CLIPBOARD", "0");
         }
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -534,6 +550,7 @@ mod tests {
             composer_alive: true, composer_stale: false } };
         assert!(!h.is_healthy());
         assert_eq!(h.failures(), vec!["no IP assigned"]);
+        assert!(!h.requires_recovery());
     }
 
     /// Composer death must be reported separately: it is the root of the chain.
@@ -560,6 +577,27 @@ mod tests {
         };
         assert!(!h.is_healthy(), "a stale composer must not count as healthy");
         assert!(h.failures().iter().any(|f| f.contains("stale")), "{:?}", h.failures());
+    }
+
+    #[test]
+    fn critical_failures_require_recovery() {
+        let healthy = Health {
+            session_running: true,
+            container_running: true,
+            has_ip: true,
+            boot_completed: true,
+            composer_alive: true,
+            composer_stale: false,
+        };
+
+        assert!(!healthy.requires_recovery());
+        assert!(!Health { has_ip: false, ..healthy.clone() }.requires_recovery());
+
+        assert!(Health { session_running: false, ..healthy.clone() }.requires_recovery());
+        assert!(Health { container_running: false, ..healthy.clone() }.requires_recovery());
+        assert!(Health { boot_completed: false, ..healthy.clone() }.requires_recovery());
+        assert!(Health { composer_alive: false, ..healthy.clone() }.requires_recovery());
+        assert!(Health { composer_stale: true, ..healthy }.requires_recovery());
     }
 
     #[test]

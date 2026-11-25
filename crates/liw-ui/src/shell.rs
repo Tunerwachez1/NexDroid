@@ -22,7 +22,7 @@ impl Render for AppState {
         // TitlebarOptions.title is not applied on Wayland in this gpui
         // revision, so the launcher names itself here too.
         if !self.titled {
-            window.set_window_title("NexDroid");
+            window.set_window_title("WAYTRIVO");
             self.titled = true;
         }
         let body = content(self, &t, window, cx);
@@ -79,25 +79,12 @@ fn nav(
                 .flex_row()
                 .items_center()
                 .gap(px(S2))
-                .child(
-                    div()
-                        .w(px(20.0))
-                        .h(px(20.0))
-                        .rounded(px(6.0))
-                        .bg(t.accent)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(11.0))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(t.bg)
-                        .child("N"),
-                )
+                .child(brand_icon(20.0))
                 .child(
                     div()
                         .text_size(px(14.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("NexDroid"),
+                        .child("WAYTRIVO"),
                 ),
         )
         .child(div().flex().flex_row().items_center().gap(px(S1)).children(tabs))
@@ -411,3 +398,13 @@ fn offline(t: &Theme, why: &str) -> gpui::AnyElement {
         .into_any_element()
 }
 
+
+pub(crate) fn brand_icon(size: f32) -> gpui::Img {
+    use std::sync::{Arc, OnceLock};
+    static ICON: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+    let icon = ICON.get_or_init(|| Arc::new(gpui::Image::from_bytes(
+        gpui::ImageFormat::Png,
+        include_bytes!("../../../assets/waytrivo.png").to_vec(),
+    )));
+    gpui::img(icon.clone()).size(px(size))
+}

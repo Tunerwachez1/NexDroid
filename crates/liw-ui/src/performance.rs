@@ -16,12 +16,13 @@ pub struct Preferences {
     pub fullscreen_start: bool,
     pub escape_fullscreen: bool,
     pub escape_mouse: bool,
+    pub share_clipboard: bool,
     pub screenshots: Option<PathBuf>,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self { cpus: 0, memory_mib: 0, fps: 240, show_fps: false, high_fps: true, language: "ru".into(),
-            fullscreen_start:false, escape_fullscreen:true, escape_mouse:true, screenshots:None }
+            fullscreen_start:false, escape_fullscreen:true, escape_mouse:true, share_clipboard:true, screenshots:None }
     }
 }
 pub fn directory() -> PathBuf { liw_core::Config::path().parent().unwrap().to_owned() }
@@ -43,7 +44,7 @@ impl Preferences {
         };
         anyhow::ensure!(value.is_object(), "performance.json must be an object");
         let draft=serde_json::to_value(self)?;
-        for key in ["language","fullscreen_start","escape_fullscreen","escape_mouse","screenshots"] { value[key]=draft[key].clone(); }
+        for key in ["language","fullscreen_start","escape_fullscreen","escape_mouse","share_clipboard","screenshots"] { value[key]=draft[key].clone(); }
         atomic_json(&path,&value)
     }
     pub fn load() -> Self {
@@ -373,9 +374,9 @@ impl Performance {
         div().id("about-scroll").flex_1().min_h_0().min_w_0().overflow_y_scroll().px(px(30.)).py(px(22.))
             .child(div().w_full().max_w(px(580.)).flex().flex_col().gap(px(16.))
                 .child(div().flex().items_center().gap(px(14.))
-                    .child(div().size(px(48.)).rounded(px(12.)).bg(t.accent).flex().items_center().justify_center().text_size(px(28.)).child("N"))
+                    .child(crate::shell::brand_icon(48.))
                     .child(div().flex().flex_col().gap(px(4.))
-                        .child(div().text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).child("NexDroid"))
+                        .child(div().text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).child("WAYTRIVO"))
                         .child(SharedString::from(format!("{} · {}",env!("CARGO_PKG_VERSION"),self.text("beta_status"))))))
                 .child(div().whitespace_normal().text_color(t.text_muted).child(self.text("about_description")))
                 .child(div().h(px(6.)).border_b_1().border_color(t.border))
@@ -684,7 +685,7 @@ impl Performance {
         let row=|key: &'static str,on: bool| div().id(key).flex().justify_between().items_center().gap(px(20.)).py(px(10.)).cursor_pointer()
             .child(div().flex_1().whitespace_normal().child(self.text(key))).child(toggle(on,t))
             .on_click(cx.listener(move |v,_,_,cx| {
-                let value=match key {"fullscreen_start"=>&mut v.draft.fullscreen_start,"escape_fullscreen"=>&mut v.draft.escape_fullscreen,_=>&mut v.draft.escape_mouse};
+                let value=match key {"fullscreen_start"=>&mut v.draft.fullscreen_start,"escape_fullscreen"=>&mut v.draft.escape_fullscreen,"share_clipboard"=>&mut v.draft.share_clipboard,_=>&mut v.draft.escape_mouse};
                 *value=!*value; cx.notify();
             }));
         let hint=|key|div().whitespace_normal().text_size(px(12.)).text_color(t.text_muted).child(self.text(key));
@@ -702,6 +703,9 @@ impl Performance {
                 .child(row("escape_fullscreen",self.draft.escape_fullscreen))
                 .child(row("escape_mouse",self.draft.escape_mouse))
                 .child(hint("escape_help"))
+                .child(div().h(px(8.)).border_b_1().border_color(t.border))
+                .child(row("share_clipboard",self.draft.share_clipboard))
+                .child(hint("share_clipboard_help"))
                 .child(div().h(px(8.)).border_b_1().border_color(t.border))
                 .child(self.text("screenshots"))
                 .child(div().whitespace_normal().text_color(t.text_muted).child(SharedString::from(self.draft.screenshot_directory().display().to_string())))
@@ -983,17 +987,17 @@ mod tests {
         let path=dir.path().join("performance.json");
         std::fs::write(&path,r#"{"cpus":2,"memory_mib":4096,"fps":360,"future":"keep"}"#).unwrap();
         std::fs::write(dir.path().join("display.json"),"unchanged").unwrap();
-        let draft=Preferences { language:"en".into(),escape_fullscreen:false,screenshots:Some(dir.path().join("shots")),..Default::default() };
+        let draft=Preferences { language:"en".into(),escape_fullscreen:false,share_clipboard:false,screenshots:Some(dir.path().join("shots")),..Default::default() };
         draft.save_general_in(dir.path()).unwrap();
         let value:serde_json::Value=serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(value["cpus"],2); assert_eq!(value["memory_mib"],4096); assert_eq!(value["fps"],360);
-        assert_eq!(value["future"],"keep"); assert_eq!(value["language"],"en"); assert_eq!(value["escape_fullscreen"],false);
+        assert_eq!(value["future"],"keep"); assert_eq!(value["language"],"en"); assert_eq!(value["escape_fullscreen"],false); assert_eq!(value["share_clipboard"],false);
         assert_eq!(std::fs::read_to_string(dir.path().join("display.json")).unwrap(),"unchanged");
     }
     #[core::prelude::v1::test]
     fn older_preferences_keep_escape_and_window_defaults() {
         let old:Preferences=serde_json::from_str(r#"{"fps":360,"language":"en"}"#).unwrap();
-        assert!(old.escape_fullscreen && old.escape_mouse); assert!(!old.fullscreen_start);
+        assert!(old.escape_fullscreen && old.escape_mouse && old.share_clipboard); assert!(!old.fullscreen_start);
         assert_eq!(old.fps,360); assert!(old.screenshots.is_none());
     }
     #[core::prelude::v1::test]

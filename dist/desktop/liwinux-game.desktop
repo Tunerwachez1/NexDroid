@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=NexDroid Game
-Name[ru]=Игра NexDroid
-Comment=A game running under NexDroid
-Comment[ru]=Android-игра в NexDroid
+Name=WAYTRIVO Game
+Name[ru]=Игра WAYTRIVO
+Comment=A game running under WAYTRIVO
+Comment[ru]=Android-игра в WAYTRIVO
 Exec=liw-ui
-Icon=nexdroid
+Icon=waytrivo
 Terminal=false
 Categories=Game;
 # The game window carries its own app_id so the keymapper can tell Android's

@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=NexDroid
-Name[ru]=NexDroid
+Name=WAYTRIVO
+Name[ru]=WAYTRIVO
 Comment=Android games on Linux
 Comment[ru]=Android-игры на Linux
 Exec=liw-ui
-Icon=nexdroid
+Icon=waytrivo
 Terminal=false
 Categories=Game;
 StartupWMClass=liwinux

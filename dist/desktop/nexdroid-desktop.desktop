@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=NexDroid Desktop
-Name[ru]=Рабочий стол NexDroid
-Comment=Open the Android desktop in NexDroid
-Comment[ru]=Открыть рабочий стол Android в NexDroid
+Name=WAYTRIVO Desktop
+Name[ru]=Рабочий стол WAYTRIVO
+Comment=Open the Android desktop in WAYTRIVO
+Comment[ru]=Открыть рабочий стол Android в WAYTRIVO
 Exec=liw-ui --game dev.waydroid.manager.home
-Icon=nexdroid
+Icon=waytrivo
 Terminal=false
 Categories=Game;
 StartupWMClass=liwinux-game

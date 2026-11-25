@@ -23,6 +23,9 @@ if [[ ${1:-} == --check ]]; then
     echo 'Комплект проверен. Системные службы и Android не изменялись.' >&3
     exit
 fi
+exec 8>"$XDG_RUNTIME_DIR/nexdroid-bootstrap.lock"
+flock -n 8 || error "NexDroid installation is already running."
+
 prepared=false
 if [[ $(cat /opt/nexdroid/ready 2>/dev/null || true) != "$id" ]]; then
     command -v pkexec >/dev/null || error 'В Linux отсутствует PolicyKit (pkexec). Он нужен для первого запуска контейнера.'
@@ -30,12 +33,13 @@ if [[ $(cat /opt/nexdroid/ready 2>/dev/null || true) != "$id" ]]; then
     if pgrep -u "$(id -u)" -x liw-ui >/dev/null; then
         error 'Перед первым запуском нового комплекта закройте все окна NexDroid.'
     fi
-    pkexec /bin/bash "$src/setup-system" &
+    echo "NexDroid: installing runtime update..." >&3
+    pkexec /bin/bash "$src/setup-system" 8>&- &
     setup=$!
     boot=false
     while kill -0 "$setup" 2>/dev/null; do
         if ! "$boot" && [[ $(cat "/run/nexdroid/bootstrap-$(id -u).ready" 2>/dev/null || true) == "$id:boot" ]]; then
-            "$src/runtime-exec" /usr/bin/setsid --fork /usr/bin/waydroid session start
+            NEXDROID_CLIPBOARD=0 "$src/runtime-exec" /usr/bin/setsid --fork /usr/bin/waydroid session start 8>&-
             boot=true
         fi
         sleep 0.3
@@ -46,8 +50,10 @@ if [[ $(cat /opt/nexdroid/ready 2>/dev/null || true) != "$id" ]]; then
     ((result == 0)) || error "Первый запуск не завершён. Подробности: $logdir/standalone.log"
     prepared=true
 fi
+exec 8>&-
 base=/opt/nexdroid/current
-mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/liwinux" "$HOME/.local/share/applications"
+applications="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/liwinux" "$applications"
 unit="$HOME/.config/systemd/user/liwd.service"
 if "$prepared" || ! cmp -s "$base/integration/liwd.service" "$unit"; then
     [[ ! -f $unit ]] || cp -p "$unit" "$unit.before-standalone"
@@ -68,16 +74,22 @@ if "$prepared"; then
     systemctl --user restart nexdroid-keyboard.service ||
         echo "WARNING: Keyboard bridge restart failed" >&2
 fi
-cat > "$HOME/.local/share/applications/nexdroid-standalone.desktop" <<'EOF'
+cat > "$applications/nexdroid-standalone.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=NexDroid
+Name=WAYTRIVO
 Comment=Android desktop and games
 Exec=/opt/nexdroid/current/NexDroid
-Icon=/opt/nexdroid/current/integration/nexdroid.svg
+Icon=/opt/nexdroid/current/integration/waytrivo.png
+StartupWMClass=liwinux
 Terminal=false
 Categories=Game;
 EOF
+# Wayland matches the stable app IDs when resolving taskbar icons.
+for app_id in liwinux liwinux-game; do
+    sed -e "s/^StartupWMClass=.*/StartupWMClass=$app_id/" -e '/^Terminal=/a NoDisplay=true' \
+        "$applications/nexdroid-standalone.desktop" > "$applications/$app_id.desktop"
+done
 export PATH="$base/host-bin:$PATH"
 if [[ $# == 0 ]]; then set -- --game dev.waydroid.manager.home; fi
 exec "$base/ui-runner" "$@"

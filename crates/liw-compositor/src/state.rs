@@ -50,7 +50,12 @@ use smithay::{
     delegate_xdg_shell,
 };
 
+use smithay::wayland::selection::data_device::{DataDeviceState, set_data_device_focus};
+
 use crate::{ClientState, Guest, GuestHandle};
+
+mod clipboard;
+pub use clipboard::MAX_CLIPBOARD_BYTES;
 
 /// What we know about the single surface we host.
 #[derive(Debug, Default, Clone)]
@@ -68,6 +73,8 @@ pub struct Compositor {
     pub dmabuf_global: DmabufGlobal,
     pub output: Output,
     pub seat_state: SeatState<Self>,
+    data_device: DataDeviceState,
+    clipboard: clipboard::Clipboard,
     /// The seat itself, kept alive for as long as the compositor is. Dropping
     /// it would remove the global from under a client that needs it.
     pub seat: Seat<Self>,
@@ -122,6 +129,8 @@ impl Compositor {
             dmabuf_global,
             output,
             seat_state,
+            data_device: DataDeviceState::new::<Self>(dh),
+            clipboard: clipboard::Clipboard::default(),
             seat,
             guest: Arc::new(Mutex::new(Guest::default())),
             surface: None,
@@ -383,6 +392,10 @@ impl SeatHandler for Compositor {
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
+    }
+
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        set_data_device_focus(&self.dh, seat, focused.and_then(Resource::client));
     }
 }
 

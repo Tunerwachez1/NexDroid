@@ -47,6 +47,7 @@ pub fn render(s: &AppState, t: &Theme, cx: &mut Context<AppState>) -> gpui::AnyE
         .child(signals(s, t))
         .child(latency_panel(s, t))
         .child(actions(s, t, cx))
+        .child(network(s, t, cx))
         .child(deeper(t))
         .into_any_element()
 }
@@ -221,6 +222,63 @@ fn actions(s: &AppState, t: &Theme, cx: &mut Context<AppState>) -> gpui::AnyElem
             })
             .into_any_element())
 }
+
+fn network(s: &AppState, t: &Theme, cx: &mut Context<AppState>) -> gpui::AnyElement {
+    let busy = s.busy.is_some();
+    panel(t, "Android network", "Check DHCP, Linux routing and the Android default network.",
+        div().flex().flex_col().gap(px(S2))
+            .child(div().flex().gap(px(S2))
+                .child(button(t, "network-check", "Check network", busy, cx,
+                    |state, cx| check_network(state, cx, false)))
+                .child(button(t, "network-repair", "Repair network", busy, cx,
+                    |state, cx| check_network(state, cx, true))))
+            .children(s.network_report.iter().map(|line| div().text_size(px(12.0))
+                .whitespace_normal().text_color(t.text_muted).child(SharedString::from(line.clone()))))
+            .into_any_element())
+}
+
+fn check_network(state: &mut AppState, cx: &mut Context<AppState>, repair: bool) {
+    state.busy = Some("network");
+    state.network_report.clear();
+    cx.notify();
+    let task = gpui_tokio::Tokio::spawn(cx, async move {
+        let helper = liw_core::HelperClient::connect().await.map_err(|error| error.to_string())?;
+        if repair {
+            let report = helper.net_repair().await.map_err(|error| error.to_string())?;
+            return Ok::<_, String>(report.lines().map(str::to_owned).collect());
+        }
+        let report = helper.net_diagnose().await.map_err(|error| error.to_string())?;
+        let value: serde_json::Value = serde_json::from_str(&report).map_err(|error| error.to_string())?;
+        let field = |name: &str| value[name].as_str().unwrap_or("unknown");
+        let mut lines = vec![
+            format!("Bridge address  {}", field("bridge_addr")),
+            format!("Android DHCP lease  {}", field("guest_addr")),
+            format!("Linux outgoing interface  {}", field("outgoing_interface")),
+            format!("Host firewall  {}", field("active_firewall")),
+        ];
+        if let Some(ready) = value["android_default_route"].as_bool() {
+            lines.push(if ready { "Android has a default network" } else { "Android has no default network" }.into());
+        }
+        for section in ["problems", "recommendations"] {
+            lines.extend(value[section].as_array().into_iter().flatten()
+                .filter_map(|item| item.as_str()).map(str::to_owned));
+        }
+        Ok(lines)
+    });
+    cx.spawn(async move |view, cx| {
+        let report = match task.await {
+            Ok(Ok(lines)) => lines,
+            Ok(Err(error)) => vec![error],
+            Err(error) => vec![error.to_string()],
+        };
+        let _ = view.update(cx, |state, cx| {
+            state.busy = None;
+            state.network_report = report;
+            cx.notify();
+        });
+    }).detach();
+}
+
 
 fn button<F>(
     t: &Theme, id: &'static str, label: &str, busy: bool,

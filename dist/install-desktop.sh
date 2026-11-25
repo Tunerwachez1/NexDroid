@@ -14,9 +14,7 @@ install -Dm644 "$R/dist/desktop/liwinux.desktop" "$apps/liwinux.desktop"
 # The game window has an app_id of its own; without an entry it has no icon.
 install -Dm644 "$R/dist/desktop/liwinux-game.desktop" "$apps/liwinux-game.desktop"
 install -Dm644 "$R/dist/desktop/nexdroid-desktop.desktop" "$apps/nexdroid-desktop.desktop"
-for s in 32 48 64 128 256; do
-  install -Dm644 "$R/dist/icons/liwinux-$s.png" "$icons/${s}x${s}/apps/nexdroid.png"
-done
+install -Dm644 "$R/assets/waytrivo.png" "$icons/512x512/apps/waytrivo.png"
 update-desktop-database "$apps" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$icons" 2>/dev/null || true
-echo "NexDroid shortcuts installed. KDE may need a moment to refresh them."
+echo "WAYTRIVO shortcuts installed."

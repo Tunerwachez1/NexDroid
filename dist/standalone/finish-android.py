@@ -9,16 +9,17 @@ import subprocess
 import sys
 import time
 
-def shell(*args):
+def shell(*args, timeout=20):
     p = subprocess.run(['/usr/bin/waydroid', 'shell', '--', *args], check=True,
-                       capture_output=True, text=True, timeout=20)
+                       capture_output=True, text=True, timeout=timeout)
     return p.stdout.replace('\r', '').strip()
 
 def finish(uid, keyboard_only=False):
     assert os.geteuid() == 0 and uid > 0
-    for _ in range(180):
+    deadline = time.monotonic() + (10 if keyboard_only else 180)
+    while time.monotonic() < deadline:
         try:
-            if shell('getprop', 'sys.boot_completed') == '1':
+            if shell('getprop', 'sys.boot_completed', timeout=max(0.1, min(5, deadline - time.monotonic()))) == '1':
                 break
         except (subprocess.SubprocessError, OSError):
             pass
@@ -50,7 +51,6 @@ def finish(uid, keyboard_only=False):
     if keyboard_only:
         return
     shell('ime', 'enable', pkg + '/.HardwareIme')
-    shell('ime', 'set', pkg + '/.HardwareIme')
     shell('settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '0')
     shell('cmd', 'package', 'set-home-activity', '--user', '0', pkg + '/.MainActivity')
 

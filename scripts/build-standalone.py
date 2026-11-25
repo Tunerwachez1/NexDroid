@@ -25,6 +25,8 @@ def build(args):
     runtime_builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runtime_builder)
     runtime_builder.patch_host_driver(out / 'runtime')
+    runtime_builder.patch_clipboard(out / 'runtime')
+    runtime_builder.patch_post_android_boot(out / 'runtime')
     clone(REPO / 'dist/android', out / 'images')
     for src in (REPO / 'dist/standalone').iterdir():
         if not src.is_file(): continue
@@ -96,7 +98,7 @@ WantedBy=graphical-session.target
     shutil.copyfile(REPO / 'dist/polkit/id.liwinux.policy', integration / 'id.liwinux.policy')
     shutil.copyfile(REPO / 'dist/config/embedded.toml', integration / 'embedded.toml')
     shutil.copyfile(REPO / 'android/desktop/host/layout_sync.py', integration / 'layout_sync.py')
-    shutil.copyfile(REPO / 'assets/logo.svg', integration / 'nexdroid.svg')
+    shutil.copyfile(REPO / 'assets/waytrivo.png', integration / 'waytrivo.png')
     unit('runtime-override.conf', f'''[Service]
 ExecStart=
 ExecStartPre=
